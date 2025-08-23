@@ -1,0 +1,10 @@
+version: 3
+agent:
+  web_addr: 0.0.0.0:4040
+endpoints:
+  - name: frontend
+    upstream:
+      url: http://frontend:3001
+  - name: backend
+    upstream:
+      url: http://webrtc-server:8000

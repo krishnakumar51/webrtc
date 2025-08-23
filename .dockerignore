@@ -1,0 +1,21 @@
+# Ignore node_modules and other unnecessary files for Docker builds
+node_modules
+npm-debug.log
+yarn-error.log
+dist
+.next
+coverage
+.DS_Store
+.env
+.env.*
+*.local
+*.log
+*.swp
+.vscode
+bench/
+metrics/
+.git
+.gitignore
+README.md
+LICENSE.md
+ultralytics_pt_to_onnx.md

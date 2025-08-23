@@ -1,0 +1,65 @@
+version: '3.8'
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_SIGNALING_SERVER_URL=http://localhost:8000
+      - NEXT_PUBLIC_MODE=${MODE:-wasm}
+      - NEXT_PUBLIC_NGROK_URL=${NEXT_PUBLIC_NGROK_URL:-}
+      - NEXT_PUBLIC_USE_NGROK=${USE_NGROK:-true}
+      - USE_NGROK=${USE_NGROK:-true}
+    depends_on:
+      - webrtc-server
+    volumes:
+      - ./metrics:/app/metrics
+    networks:
+      - webrtc-network
+
+  webrtc-server:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - NODE_ENV=production
+      - USE_NGROK=${USE_NGROK:-true}
+      - PORT=8000
+    env_file:
+      - .env
+    volumes:
+      - ./metrics:/app/metrics
+    networks:
+      - webrtc-network
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    env_file:
+      - .env
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command:
+      - start
+      - --all
+      - --config
+      - /ngrok.yml
+    volumes:
+      - ./ngrok.yml:/ngrok.yml
+    depends_on:
+      - frontend
+      - webrtc-server
+    ports:
+      - "4040:4040"
+    networks:
+      - webrtc-network
+
+networks:
+  webrtc-network:
+    driver: bridge
