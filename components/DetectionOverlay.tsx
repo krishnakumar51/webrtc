@@ -53,7 +53,8 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       ctx.restore();
 
       // Draw label background with glassmorphism effect
-      const label = `${detection.label} ${(detection.score * 100).toFixed(1)}%`;
+      const scorePercent = detection.score && isFinite(detection.score) ? (detection.score * 100).toFixed(1) : 'N/A';
+      const label = `${detection.label} ${scorePercent}%`;
       ctx.font = 'bold 16px Segoe UI, Arial, sans-serif';
       const textWidth = ctx.measureText(label).width;
       const textHeight = 24;

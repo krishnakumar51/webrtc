@@ -1,5 +1,5 @@
-import Webcam from 'react-webcam';
 import { useRef, useState, useEffect, useLayoutEffect } from 'react';
+import Webcam from 'react-webcam';
 import { runModelUtils } from '../utils';
 import { InferenceSession, Tensor } from 'onnxruntime-web';
 
@@ -26,6 +26,7 @@ const ObjectDetectionCamera = (props: {
 
   const [facingMode, setFacingMode] = useState<string>('environment');
   const originalSize = useRef<number[]>([0, 0]);
+  const [SSR, setSSR] = useState<Boolean>(true);
 
   const [modelResolution, setModelResolution] = useState<number[]>(
     props.currentModelResolution
@@ -34,6 +35,10 @@ const ObjectDetectionCamera = (props: {
   useEffect(() => {
     setModelResolution(props.currentModelResolution);
   }, [props.currentModelResolution]);
+
+
+
+
 
   const capture = () => {
     const canvas = videoCanvasRef.current!;
@@ -113,8 +118,6 @@ const ObjectDetectionCamera = (props: {
     liveDetection.current = false;
   };
 
-  const [SSR, setSSR] = useState<Boolean>(true);
-
   const setWebcamCanvasOverlaySize = () => {
     const element = webcamRef.current!.video!;
     if (!element) return;
@@ -150,15 +153,12 @@ const ObjectDetectionCamera = (props: {
         className="flex items-center justify-center webcam-container"
       >
         <Webcam
+          ref={webcamRef}
           mirrored={facingMode === 'user'}
           audio={false}
-          ref={webcamRef}
           screenshotFormat="image/jpeg"
-          imageSmoothing={true}
           videoConstraints={{
             facingMode: facingMode,
-            // width: props.width,
-            // height: props.height,
           }}
           onLoadedMetadata={() => {
             setWebcamCanvasOverlaySize();
@@ -167,7 +167,6 @@ const ObjectDetectionCamera = (props: {
               webcamRef.current!.video!.offsetHeight,
             ] as number[];
           }}
-          forceScreenshotSourceSize={true}
         />
         <canvas
           id="cv1"

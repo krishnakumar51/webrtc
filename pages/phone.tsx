@@ -18,6 +18,9 @@ export default function Phone({ signalingUrl }: PhoneProps) {
   const [framesSent, setFramesSent] = useState(0);
   const [detections, setDetections] = useState<any[]>([]);
   
+  // Dynamic signaling URL detection
+  const [currentSignalingUrl, setCurrentSignalingUrl] = useState<string>('');
+  
   console.log('🔧 Current room:', room);
   console.log('🔧 Current window.location:', typeof window !== 'undefined' ? window.location.href : 'SSR');
 
@@ -29,17 +32,58 @@ export default function Phone({ signalingUrl }: PhoneProps) {
   const streamingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const frameIdRef = useRef(0);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Helper fetcher for NGROK dynamic URLs
+  const fetchDynamicUrls = async () => {
+    try {
+      console.log('🔧 Fetching dynamic URLs from ngrok status API...');
+      const response = await fetch('/api/ngrok-status');
+      if (response.ok) {
+        const data = await response.json();
+        console.log('🔧 Dynamic URLs fetched:', data);
+        
+        // Use the signaling URL from the API directly (http/https for Socket.IO)
+        if (data.signalingUrl) {
+          setCurrentSignalingUrl(data.signalingUrl);
+          console.log('🔧 Updated signaling URL to:', data.signalingUrl);
+        }
+      } else {
+        console.warn('⚠️ Failed to fetch dynamic URLs, using fallback');
+        if (!currentSignalingUrl) {
+          // Use the current domain but port 8000 for signaling
+          const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+          const hostname = window.location.hostname;
+          const fallbackUrl = `${protocol}//${hostname}:8000`;
+          setCurrentSignalingUrl(fallbackUrl);
+          console.log('🔧 Using fallback signaling URL:', fallbackUrl);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error fetching dynamic URLs:', error);
+      if (!currentSignalingUrl) {
+        // Use the current domain but port 8000 for signaling
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const hostname = window.location.hostname;
+        const fallbackUrl = `${protocol}//${hostname}:8000`;
+        setCurrentSignalingUrl(fallbackUrl);
+        console.log('🔧 Using fallback signaling URL:', fallbackUrl);
+      }
+    }
+  };
+
+  // Initial URL fetching
   useEffect(() => {
-    if (room) {
+    fetchDynamicUrls();
+  }, []);
+
+  useEffect(() => {
+    if (room && currentSignalingUrl) {
       initializeConnection();
     }
 
     return () => {
       cleanup();
     };
-  }, [room]);
+  }, [room, currentSignalingUrl]);
 
   const initializeConnection = async () => {
     console.log('🔧 Starting initializeConnection...');
@@ -74,136 +118,314 @@ export default function Phone({ signalingUrl }: PhoneProps) {
   };
 
   const setupWebRTC = async (stream: MediaStream) => {
+    console.log('🔧 Phone - Setting up WebRTC peer connection...');
+    
     const configuration = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ],
+      iceCandidatePoolSize: 10 // Pre-gather ICE candidates for faster connection
     };
 
+    console.log('🧊 Phone - ICE servers configured:', configuration.iceServers);
+    console.log('📊 Phone - ICE candidate pool size:', configuration.iceCandidatePoolSize);
+
     peerConnectionRef.current = new RTCPeerConnection(configuration);
+    
+    console.log('✅ Phone - RTCPeerConnection created successfully');
+    console.log('📊 Phone - Initial connection state:', peerConnectionRef.current.connectionState);
+    console.log('📊 Phone - Initial signaling state:', peerConnectionRef.current.signalingState);
 
     // Add video track
-    stream.getTracks().forEach(track => {
+    console.log('📹 Phone - Adding video tracks to peer connection...');
+    stream.getTracks().forEach((track, index) => {
+      console.log(`📹 Phone - Adding track ${index}: ${track.kind} (${track.label})`);
       peerConnectionRef.current?.addTrack(track, stream);
     });
+    console.log('✅ Phone - All video tracks added successfully');
 
     // Create data channel for sending frames
+    console.log('📡 Phone - Creating data channel for frame transmission...');
     dataChannelRef.current = peerConnectionRef.current.createDataChannel('frames', {
-      ordered: false // Allow out-of-order delivery for real-time
+      ordered: true // Use ordered delivery to match browser expectation
+    });
+    
+    console.log('📊 Phone - Data channel configuration:', {
+      label: dataChannelRef.current.label,
+      ordered: true,
+      readyState: dataChannelRef.current.readyState
     });
 
     dataChannelRef.current.onopen = () => {
-      console.log('Data channel opened');
+      console.log('✅ Phone - Data channel opened successfully - ready for streaming');
+      console.log('📊 Phone - Data channel ready state:', dataChannelRef.current?.readyState);
+      console.log('📊 Phone - Data channel max message size:', dataChannelRef.current?.maxPacketLifeTime);
       setIsConnected(true);
+      setError(''); // Clear any previous errors
     };
 
     dataChannelRef.current.onclose = () => {
-      console.log('Data channel closed');
+      console.log('📡 Phone - Data channel closed');
+      console.log('📊 Phone - Data channel ready state:', dataChannelRef.current?.readyState);
       setIsConnected(false);
+    };
+
+    dataChannelRef.current.onerror = (error) => {
+      console.error('❌ Phone - Data channel error:', error);
+      console.error('📊 Phone - Data channel ready state:', dataChannelRef.current?.readyState);
+      console.error('📊 Phone - Error type:', error.type);
+      setError('Data channel connection failed');
+    };
+    
+    dataChannelRef.current.onbufferedamountlow = () => {
+      console.log('📊 Phone - Data channel buffer amount low');
     };
 
     // Handle incoming messages (detection results)
     dataChannelRef.current.onmessage = (event) => {
+      console.log('📨 Phone - Received detection results from browser');
+      console.log('📊 Phone - Message size:', event.data.length);
       try {
         const result = JSON.parse(event.data);
+        console.log('📊 Phone - Parsed detection results:', result.detections?.length || 0, 'detections');
         setDetections(result.detections || []);
       } catch (error) {
-        console.error('Error parsing detection result:', error);
+        console.error('❌ Phone - Error parsing detection result:', error);
+        console.error('📊 Phone - Raw message data:', event.data.substring(0, 100) + '...');
       }
+    };
+
+    // Handle connection state changes
+    peerConnectionRef.current.onconnectionstatechange = () => {
+      const state = peerConnectionRef.current?.connectionState;
+      console.log('🔄 Phone - WebRTC connection state changed:', state);
+      console.log('📊 Phone - ICE connection state:', peerConnectionRef.current?.iceConnectionState);
+      console.log('📊 Phone - ICE gathering state:', peerConnectionRef.current?.iceGatheringState);
+      
+      if (state === 'connected') {
+        console.log('✅ Phone - WebRTC peer connection established successfully');
+      } else if (state === 'disconnected') {
+        console.log('⚠️ Phone - WebRTC connection disconnected');
+        setIsConnected(false);
+        setError('Connection to browser lost');
+      } else if (state === 'failed') {
+        console.log('❌ Phone - WebRTC connection failed');
+        setIsConnected(false);
+        setError('Connection to browser lost');
+      } else if (state === 'connecting') {
+        console.log('🔄 Phone - WebRTC connection in progress...');
+      }
+    };
+    
+    peerConnectionRef.current.onicegatheringstatechange = () => {
+      console.log('🧊 Phone - ICE gathering state changed:', peerConnectionRef.current?.iceGatheringState);
+    };
+    
+    peerConnectionRef.current.oniceconnectionstatechange = () => {
+      console.log('🧊 Phone - ICE connection state changed:', peerConnectionRef.current?.iceConnectionState);
+    };
+    
+    peerConnectionRef.current.onsignalingstatechange = () => {
+      console.log('📡 Phone - Signaling state changed:', peerConnectionRef.current?.signalingState);
     };
 
     // Handle ICE candidates
     peerConnectionRef.current.onicecandidate = (event) => {
-      if (event.candidate && socketRef.current) {
-        socketRef.current.emit('ice-candidate', {
-          room,
-          candidate: event.candidate
-        });
+      if (event.candidate) {
+        console.log('🧊 Phone - Generated ICE candidate:', event.candidate.candidate);
+        console.log('📊 Phone - ICE candidate type:', event.candidate.type);
+        console.log('📊 Phone - ICE candidate protocol:', event.candidate.protocol);
+        
+        if (socketRef.current) {
+          socketRef.current.emit('ice-candidate', {
+            room,
+            candidate: event.candidate
+          });
+          console.log('📤 Phone - ICE candidate sent to browser');
+        } else {
+          console.warn('⚠️ Phone - No socket available to send ICE candidate');
+        }
+      } else {
+        console.log('🧊 Phone - ICE candidate gathering completed (null candidate)');
       }
     };
+    
+    console.log('✅ Phone - WebRTC peer connection setup completed');
   };
 
   const setupSocketConnection = () => {
-    // Use the signaling URL passed from getServerSideProps
-    console.log('🔧 setupSocketConnection called');
-    console.log('🔧 Connecting to signaling server:', signalingUrl);
-    console.log('🔧 Room ID:', room);
+    console.log('📱 Phone - setupSocketConnection called');
+    console.log('📱 Phone - Using dynamic signaling server:', currentSignalingUrl);
+    console.log('📱 Phone - Room ID:', room);
+
+    // Cleanup previous socket
+    if (socketRef.current) {
+      console.log('🧹 Phone - Cleaning up previous socket connection...');
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
     
-    socketRef.current = io(signalingUrl, {
+    console.log('🔌 Phone - Creating new socket connection...');
+    socketRef.current = io(currentSignalingUrl, {
       transports: ['websocket', 'polling'],
-      timeout: 20000,
-      forceNew: true
+      timeout: 10000,
+      secure: currentSignalingUrl.startsWith('https://'),
+      rejectUnauthorized: false,
+      path: '/socket.io',
+      extraHeaders: {
+        'ngrok-skip-browser-warning': 'true',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+      }
     });
 
     socketRef.current.on('connect', () => {
-      console.log('✅ Connected to signaling server successfully');
-      console.log('🔧 Socket ID:', socketRef.current?.id);
+      console.log('✅ Phone - Connected to signaling server successfully');
+      console.log('📱 Phone - Socket ID:', socketRef.current?.id);
+      console.log('🏠 Phone - Joining room as phone type...');
       socketRef.current?.emit('join-room', { room, type: 'phone' });
-      console.log('🔧 Emitted join-room event');
+      console.log('📤 Phone - Emitted join-room event with room:', room);
+      
+      // Note: Offer will be created when browser joins (peer-joined event)
     });
     
-    socketRef.current.on('connect_error', (error) => {
-      console.error('❌ Socket connection error:', error);
-      console.error('❌ Error details:', error.message);
-      console.error('❌ Attempted URL:', signalingUrl);
+    socketRef.current.on('connect_error', (error: any) => {
+      console.error('❌ Phone - Socket connection error:', error);
+      console.error('❌ Phone - Error details:', error?.message || 'Unknown error');
+      console.error('❌ Phone - Error type:', error?.type || 'Unknown type');
+      console.error('❌ Phone - Attempted URL:', currentSignalingUrl);
+      console.error('❌ Phone - Transport:', error?.transport || 'Unknown transport');
     });
     
     socketRef.current.on('disconnect', (reason) => {
-      console.log('🔧 Socket disconnected:', reason);
+      console.log('📱 Phone - Socket disconnected, reason:', reason);
+      console.log('📱 Phone - Connection state before disconnect:', socketRef.current?.connected);
     });
 
     socketRef.current.on('offer', async (data) => {
+      console.log('📨 Phone - Received WebRTC offer from browser');
+      console.log('📊 Phone - Offer SDP type:', data.offer?.type);
+      console.log('📊 Phone - Offer SDP length:', data.offer?.sdp?.length || 0);
       if (peerConnectionRef.current) {
-        await peerConnectionRef.current.setRemoteDescription(data.offer);
-        const answer = await peerConnectionRef.current.createAnswer();
-        await peerConnectionRef.current.setLocalDescription(answer);
-        
-        socketRef.current?.emit('answer', {
-          room,
-          answer
-        });
+        try {
+          console.log('🔄 Phone - Setting remote description (offer)...');
+          await peerConnectionRef.current.setRemoteDescription(data.offer);
+          console.log('✅ Phone - Set remote description (offer) successfully');
+          
+          console.log('🔄 Phone - Creating answer...');
+          const answer = await peerConnectionRef.current.createAnswer();
+          console.log('📊 Phone - Answer SDP type:', answer.type);
+          console.log('📊 Phone - Answer SDP length:', answer.sdp?.length || 0);
+          
+          console.log('🔄 Phone - Setting local description (answer)...');
+          await peerConnectionRef.current.setLocalDescription(answer);
+          console.log('✅ Phone - Created and set local description (answer) successfully');
+          
+          console.log('📤 Phone - Sending answer to browser via socket...');
+          socketRef.current?.emit('answer', {
+            room,
+            answer
+          });
+          console.log('✅ Phone - Answer sent to browser successfully');
+        } catch (error) {
+        console.error('❌ Phone - Error handling offer:', error);
+        console.error('❌ Phone - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+          setError('Failed to process browser connection');
+        }
+      } else {
+        console.warn('⚠️ Phone - No peer connection available for offer');
+      }
+    });
+
+    socketRef.current.on('answer', async (data) => {
+      console.log('📨 Phone - Received WebRTC answer from browser');
+      console.log('📊 Phone - Answer SDP type:', data.answer?.type);
+      console.log('📊 Phone - Answer SDP length:', data.answer?.sdp?.length || 0);
+      if (peerConnectionRef.current) {
+        try {
+          console.log('🔄 Phone - Setting remote description (answer)...');
+          await peerConnectionRef.current.setRemoteDescription(data.answer);
+          console.log('✅ Phone - Set remote description (answer) successfully');
+        } catch (error) {
+        console.error('❌ Phone - Error handling answer:', error);
+        console.error('❌ Phone - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+          setError('Failed to process browser answer');
+        }
+      } else {
+        console.warn('⚠️ Phone - No peer connection available for answer');
       }
     });
 
     socketRef.current.on('ice-candidate', async (data) => {
+      console.log('🧊 Phone - Received ICE candidate from browser');
+      console.log('📊 Phone - ICE candidate type:', data.candidate?.candidate ? 'valid' : 'end-of-candidates');
       if (peerConnectionRef.current && data.candidate) {
-        await peerConnectionRef.current.addIceCandidate(data.candidate);
+        try {
+          console.log('🔄 Phone - Adding ICE candidate...');
+          await peerConnectionRef.current.addIceCandidate(data.candidate);
+          console.log('✅ Phone - ICE candidate added successfully');
+        } catch (error) {
+        console.error('❌ Phone - Error adding ICE candidate:', error);
+        console.error('❌ Phone - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+        }
+      } else if (!peerConnectionRef.current) {
+        console.warn('⚠️ Phone - No peer connection available for ICE candidate');
+      } else {
+        console.log('🧊 Phone - Received end-of-candidates signal');
       }
     });
 
     socketRef.current.on('peer-joined', (data) => {
+      console.log('👥 Phone - Peer joined event received:', data);
       if (data.type === 'browser') {
-        console.log('Browser connected');
-        // Create and send offer
-        createOffer();
+        console.log('🌐 Phone - Browser connected to room');
+        console.log('📊 Phone - Browser socket ID:', data.socketId || 'unknown');
+        console.log('⏳ Phone - Waiting for browser to send offer...');
+        // Phone should wait for browser to create offer, not create one itself
+      } else {
+        console.log('👤 Phone - Non-browser peer joined:', data.type);
       }
     });
   };
 
-  const createOffer = async () => {
-    if (!peerConnectionRef.current) return;
-
-    try {
-      const offer = await peerConnectionRef.current.createOffer();
-      await peerConnectionRef.current.setLocalDescription(offer);
-      
-      socketRef.current?.emit('offer', {
-        room,
-        offer
-      });
-    } catch (error) {
-      console.error('Error creating offer:', error);
-    }
-  };
+  // Removed createOffer function - browser now creates the offer
 
   const startStreaming = () => {
-    if (!isConnected || !dataChannelRef.current) {
-      setError('Not connected to browser');
+    console.log('🔧 Attempting to start streaming...');
+    console.log('🔧 Connection state:', {
+      isConnected,
+      dataChannelExists: !!dataChannelRef.current,
+      dataChannelState: dataChannelRef.current?.readyState,
+      peerConnectionState: peerConnectionRef.current?.connectionState
+    });
+    
+    if (!isConnected) {
+      const errorMsg = 'Not connected to browser - waiting for data channel to open';
+      console.log('❌', errorMsg);
+      setError(errorMsg);
+      return;
+    }
+    
+    if (!dataChannelRef.current) {
+      const errorMsg = 'Data channel not available';
+      console.log('❌', errorMsg);
+      setError(errorMsg);
+      return;
+    }
+    
+    if (dataChannelRef.current.readyState !== 'open') {
+      const errorMsg = `Data channel not ready (state: ${dataChannelRef.current.readyState})`;
+      console.log('❌', errorMsg);
+      setError(errorMsg);
       return;
     }
 
+    console.log('✅ Starting video stream...');
     setIsStreaming(true);
+    setError(''); // Clear any previous errors
     frameIdRef.current = 0;
     
     // Start sending frames at ~15 FPS
@@ -222,44 +444,95 @@ export default function Phone({ signalingUrl }: PhoneProps) {
   const sendFrame = () => {
     if (!videoRef.current || !canvasRef.current || !dataChannelRef.current || 
         dataChannelRef.current.readyState !== 'open') {
+      console.warn('📱 Phone - Missing required refs or data channel not open');
       return;
     }
+
+    const frameId = `frame_${frameIdRef.current++}`;
+    const captureStart = Date.now();
+    
+    console.log(`📸 Phone - Starting frame capture ${frameId}`);
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     
-    if (!ctx) return;
+    if (!ctx) {
+      console.error('❌ Phone - Cannot get canvas context');
+      return;
+    }
 
-    // Resize to lower resolution for performance
-    canvas.width = 320;
-    canvas.height = 240;
+    // Get image data at full resolution for object detection
+    // The browser will handle resizing based on mode (320x320 for WASM, 640x640 for server)
+    const videoWidth = video.videoWidth || 640;
+    const videoHeight = video.videoHeight || 480;
     
-    // Draw current video frame to canvas
+    canvas.width = videoWidth;
+    canvas.height = videoHeight;
+    
+    console.log(`📐 Phone - Video dimensions: ${videoWidth}x${videoHeight}`);
+    
+    // Draw current video frame to canvas at full resolution
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const drawTime = Date.now() - captureStart;
+    
+    console.log(`🎨 Phone - Frame drawn to canvas in ${drawTime}ms`);
     
     // Get image data
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     
-    // Prepare frame data
+    // Prepare frame data with metadata for processing
+    const compressionStart = Date.now();
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    const compressionTime = Date.now() - compressionStart;
+    
+    console.log(`🗜️ Phone - Frame compressed in ${compressionTime}ms, size: ${(dataUrl.length / 1024).toFixed(1)}KB`);
+    
     const frameData = {
-      frame_id: `frame_${frameIdRef.current++}`,
-      capture_ts: Date.now(),
+      frame_id: frameId,
+      capture_ts: captureStart,
       width: canvas.width,
       height: canvas.height,
-      imageData: {
-        data: Array.from(imageData.data), // Convert to regular array for JSON
-        width: imageData.width,
-        height: imageData.height
-      }
+      // Send as base64 encoded image for better compression and compatibility
+      imageData: dataUrl
     };
 
+    const jsonSize = JSON.stringify(frameData).length;
+    console.log(`📦 Phone - Frame data JSON size: ${(jsonSize / 1024).toFixed(1)}KB`);
+
     try {
+      const sendStart = Date.now();
       // Send frame data
       dataChannelRef.current.send(JSON.stringify(frameData));
+      const sendTime = Date.now() - sendStart;
+      
+      console.log(`📤 Phone - Frame ${frameId} sent successfully in ${sendTime}ms (total: ${Date.now() - captureStart}ms)`);
       setFramesSent(prev => prev + 1);
     } catch (error) {
-      console.error('Error sending frame:', error);
+      console.error('❌ Phone - Error sending frame:', error);
+      // Fallback: try with lower quality
+      try {
+        console.warn(`⚠️ Phone - Retrying frame ${frameId} with lower quality`);
+        const retryStart = Date.now();
+        
+        const fallbackDataUrl = canvas.toDataURL('image/jpeg', 0.5);
+        const fallbackData = {
+          ...frameData,
+          imageData: fallbackDataUrl
+        };
+        
+        const retryJsonSize = JSON.stringify(fallbackData).length;
+        console.log(`🔄 Phone - Retry JSON size: ${(retryJsonSize / 1024).toFixed(1)}KB`);
+        
+        dataChannelRef.current.send(JSON.stringify(fallbackData));
+        const retryTime = Date.now() - retryStart;
+        
+        console.log(`📤 Phone - Frame ${frameId} sent with lower quality in ${retryTime}ms`);
+        setFramesSent(prev => prev + 1);
+      } catch (fallbackError) {
+        console.error('❌ Phone - Error sending fallback frame:', fallbackError);
+        console.error('❌ Phone - Fallback error stack:', fallbackError instanceof Error ? fallbackError.stack : 'No stack trace');
+      }
     }
   };
 
@@ -411,44 +684,14 @@ export default function Phone({ signalingUrl }: PhoneProps) {
 }
 
 export async function getServerSideProps() {
-  console.log('🔧 getServerSideProps called');
-  console.log('🔧 NEXT_PUBLIC_SIGNALING_SERVER_URL:', process.env.NEXT_PUBLIC_SIGNALING_SERVER_URL);
-  console.log('🔧 NEXT_PUBLIC_USE_NGROK:', process.env.NEXT_PUBLIC_USE_NGROK);
+  console.log('🔧 getServerSideProps called for phone page');
   
-  let signalingUrl = process.env.NEXT_PUBLIC_SIGNALING_SERVER_URL || 'http://localhost:8000';
-  console.log('🔧 Initial signalingUrl:', signalingUrl);
-
-  if (process.env.NEXT_PUBLIC_USE_NGROK === 'true') {
-    console.log('🔧 Ngrok is enabled, fetching endpoints...');
-    try {
-      // Try ngrok API for endpoints (v3 format)
-      console.log('🔧 Fetching from http://ngrok:4040/api/endpoints');
-      const res = await fetch('http://ngrok:4040/api/endpoints');
-      const data = await res.json();
-      console.log('🔧 Ngrok API response:', JSON.stringify(data, null, 2));
-      
-      // ngrok v3 uses 'endpoints' array
-      const endpoints = data.endpoints || [];
-      console.log('🔧 Available endpoints:', endpoints);
-      
-      const backendEndpoint = endpoints.find((e: any) => 
-        e.name === 'backend' && e.url?.startsWith('https://')
-      );
-      console.log('🔧 Found backend endpoint:', backendEndpoint);
-      
-      if (backendEndpoint) {
-        signalingUrl = backendEndpoint.url;
-        console.log('✅ Backend ngrok URL for phone:', signalingUrl);
-      } else {
-        console.log('⚠️ No backend ngrok endpoint found, using localhost URL');
-        console.log('🔧 Available endpoint names:', endpoints.map((e: any) => e.name));
-      }
-    } catch (err) {
-      console.error('❌ Failed to fetch ngrok endpoints:', err);
-      console.log('⚠️ Falling back to localhost URL');
-    }
-  }
-
-  console.log('🔧 Final signalingUrl being passed to component:', signalingUrl);
+  let signalingUrl = 'http://localhost:8000';
+  
+  // Always use the current browser location for signaling URL
+  // Note: window is not available in SSR, so we set a default
+  // The client-side effect will auto-detect the correct URL
+  
+  console.log('🔧 Default signalingUrl being passed to phone component:', signalingUrl);
   return { props: { signalingUrl } };
 }

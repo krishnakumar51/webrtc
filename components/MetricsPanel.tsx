@@ -31,7 +31,7 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
   };
 
   return (
-    <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20">
+    <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 h-full flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center">
           <span className="text-xl mr-2">📊</span>
@@ -46,7 +46,8 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
         </button>
       </div>
 
-      {/* E2E Latency */}
+      <div className="flex-1 overflow-y-auto">
+        {/* E2E Latency */}
       <div className="mb-4">
         <div className="flex items-center mb-2">
           <span className="text-lg mr-2">⏱️</span>
@@ -173,6 +174,7 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
             {metrics.e2eLatency.current < 100 ? 'Low Latency' : 'High Latency'}
           </span>
         </div>
+      </div>
       </div>
     </div>
   );

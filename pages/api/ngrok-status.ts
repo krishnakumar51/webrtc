@@ -64,11 +64,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let baseUrl = process.env.NEXT_PUBLIC_NGROK_URL || process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
   let signalingUrl = process.env.NEXT_PUBLIC_SIGNALING_SERVER_URL || 'http://localhost:8000';
 
-  console.log('[ngrok-status] allowNgrok =', allowNgrok, 'env(NEXT_PUBLIC_USE_NGROK)=', process.env.NEXT_PUBLIC_USE_NGROK, 'env(USE_NGROK)=', process.env.USE_NGROK);
+  console.log('[ngrok-status] Mobile HTTPS Access Check - allowNgrok =', allowNgrok);
+  console.log('[ngrok-status] Environment - NEXT_PUBLIC_USE_NGROK =', process.env.NEXT_PUBLIC_USE_NGROK, 'USE_NGROK =', process.env.USE_NGROK);
 
   // If explicitly disabled, return immediately with fallbacks
   if (!allowNgrok) {
-    console.log('[ngrok-status] Ngrok explicitly disabled via env, returning fallbacks');
+    console.log('[ngrok-status] ⚠️ Ngrok disabled - Mobile devices may not access camera (HTTP only)');
+    console.log('[ngrok-status] Frontend fallback:', baseUrl);
+    console.log('[ngrok-status] WebRTC Server fallback:', signalingUrl);
     return res.status(200).json({ baseUrl, signalingUrl });
   }
 
@@ -77,83 +80,101 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     'http://localhost:4040',
     'http://127.0.0.1:4040'
   ];
+  
+  const apiPaths = ['/api/endpoints', '/api/tunnels'];
 
   for (const base of ngrokApiBases) {
-    try {
-      const apiUrl = `${base}/api/tunnels`;
-      console.log('[ngrok-status] Trying', apiUrl);
-      const response = await fetchWithTimeout(apiUrl, 5000, { headers: { 'Accept': 'application/json' } });
-      
-      if (!response.ok) {
-        console.warn('[ngrok-status] Non-OK response', response.status, 'from', apiUrl);
+    for (const path of apiPaths) {
+      try {
+        const apiUrl = `${base}${path}`;
+        console.log('[ngrok-status] Trying', apiUrl);
+        const response = await fetch(apiUrl, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) {
+          console.warn('[ngrok-status] Non-OK response', response.status, 'from', apiUrl);
+          continue;
+        }
+
+        const data: NgrokResponse = await response.json();
+        console.log('[ngrok-status] Got keys from API:', Object.keys(data));
+
+        // Try ngrok v3 endpoints first
+        if (data.endpoints && Array.isArray(data.endpoints)) {
+          const frontendEndpoint = data.endpoints.find(ep => 
+            (ep.name === 'web-frontend' || nameMatches(ep.name, ['front', 'web'])) && 
+            (ep.url?.startsWith('https://') || ep.endpoint_url?.startsWith('https://'))
+          );
+          const backendEndpoint = data.endpoints.find(ep => 
+            (ep.name === 'api-backend' || nameMatches(ep.name, ['api', 'backend', 'webrtc', 'server'])) && 
+            (ep.url?.startsWith('https://') || ep.endpoint_url?.startsWith('https://'))
+          );
+
+          if (frontendEndpoint) {
+            const feUrl = frontendEndpoint.url || frontendEndpoint.endpoint_url;
+            if (feUrl?.startsWith('https://')) {
+              baseUrl = feUrl;
+            }
+          }
+          if (backendEndpoint) {
+            const beUrl = backendEndpoint.url || backendEndpoint.endpoint_url;
+            if (beUrl?.startsWith('https://')) {
+              signalingUrl = beUrl;
+            }
+          }
+        }
+        // Try ngrok v2 tunnels
+        else if (data.tunnels && Array.isArray(data.tunnels)) {
+          console.log('[ngrok-status] Processing tunnels:', data.tunnels.map(t => ({ name: t.name, url: t.public_url })));
+          
+          const frontendTunnel = data.tunnels.find(tunnel => 
+            (tunnel.name === 'web-frontend' || nameMatches(tunnel.name, ['front', 'web'])) && tunnel.public_url?.startsWith('https://')
+          );
+          const backendTunnel = data.tunnels.find(tunnel => 
+            (tunnel.name === 'api-backend' || nameMatches(tunnel.name, ['api', 'backend', 'webrtc', 'server'])) && tunnel.public_url?.startsWith('https://')
+          );
+
+          console.log('[ngrok-status] Frontend tunnel:', frontendTunnel?.name, frontendTunnel?.public_url);
+          console.log('[ngrok-status] Backend tunnel:', backendTunnel?.name, backendTunnel?.public_url);
+
+          if (frontendTunnel?.public_url) {
+            baseUrl = frontendTunnel.public_url;
+          }
+          if (backendTunnel?.public_url) {
+            signalingUrl = backendTunnel.public_url;
+          }
+        }
+        // Fallback: find any HTTPS URL
+        else {
+          const anyHttps = extractHttpsFromObj(data);
+          if (anyHttps) {
+            baseUrl = anyHttps;
+          }
+        }
+
+        // If we found HTTPS URLs, break out of both loops
+        if (baseUrl.startsWith('https://') || signalingUrl.startsWith('https://')) {
+          console.log('[ngrok-status] ✅ HTTPS URLs discovered - Mobile camera access enabled');
+          console.log('[ngrok-status] Frontend HTTPS URL:', baseUrl);
+          console.log('[ngrok-status] WebRTC Server HTTPS URL:', signalingUrl);
+          break;
+        }
+      } catch (error) {
+        console.warn('[ngrok-status] Error querying ngrok API path, continuing:', error);
         continue;
       }
-
-      const data: NgrokResponse = await response.json();
-      console.log('[ngrok-status] Got keys from API:', Object.keys(data));
-
-      // Try ngrok v3 endpoints first
-      if (data.endpoints && Array.isArray(data.endpoints)) {
-        const frontendEndpoint = data.endpoints.find(ep => 
-          nameMatches(ep.name, ['front', 'web']) && 
-          (ep.url?.startsWith('https://') || ep.endpoint_url?.startsWith('https://'))
-        );
-        const backendEndpoint = data.endpoints.find(ep => 
-          nameMatches(ep.name, ['api', 'backend', 'webrtc', 'server']) && 
-          (ep.url?.startsWith('https://') || ep.endpoint_url?.startsWith('https://'))
-        );
-
-        if (frontendEndpoint) {
-          const feUrl = frontendEndpoint.url || frontendEndpoint.endpoint_url;
-          if (feUrl?.startsWith('https://')) {
-            baseUrl = feUrl;
-          }
-        }
-        if (backendEndpoint) {
-          const beUrl = backendEndpoint.url || backendEndpoint.endpoint_url;
-          if (beUrl?.startsWith('https://')) {
-            signalingUrl = beUrl;
-          }
-        }
-      }
-      // Try ngrok v2 tunnels
-      else if (data.tunnels && Array.isArray(data.tunnels)) {
-        console.log('[ngrok-status] Processing tunnels:', data.tunnels.map(t => ({ name: t.name, url: t.public_url })));
-        
-        const frontendTunnel = data.tunnels.find(tunnel => 
-          nameMatches(tunnel.name, ['front', 'web']) && tunnel.public_url?.startsWith('https://')
-        );
-        const backendTunnel = data.tunnels.find(tunnel => 
-          nameMatches(tunnel.name, ['api', 'backend', 'webrtc', 'server']) && tunnel.public_url?.startsWith('https://')
-        );
-
-        console.log('[ngrok-status] Frontend tunnel:', frontendTunnel?.name, frontendTunnel?.public_url);
-        console.log('[ngrok-status] Backend tunnel:', backendTunnel?.name, backendTunnel?.public_url);
-
-        if (frontendTunnel?.public_url) {
-          baseUrl = frontendTunnel.public_url;
-        }
-        if (backendTunnel?.public_url) {
-          signalingUrl = backendTunnel.public_url;
-        }
-      }
-      // Fallback: find any HTTPS URL
-      else {
-        const anyHttps = extractHttpsFromObj(data);
-        if (anyHttps) {
-          baseUrl = anyHttps;
-        }
-      }
-
-      // If we found HTTPS URLs, break out of the loop
-      if (baseUrl.startsWith('https://') || signalingUrl.startsWith('https://')) {
-        console.log('[ngrok-status] Using discovered URLs:', { baseUrl, signalingUrl });
-        break;
-      }
-    } catch (error) {
-      console.warn('[ngrok-status] Error querying ngrok API base, continuing:', error);
-      continue;
     }
+    // If we found HTTPS URLs, break out of the outer loop too
+    if (baseUrl.startsWith('https://') || signalingUrl.startsWith('https://')) {
+      break;
+    }
+  }
+
+  // Final status logging for mobile HTTPS access
+  if (baseUrl.startsWith('https://') && signalingUrl.startsWith('https://')) {
+    console.log('[ngrok-status] ✅ Full HTTPS setup complete - Mobile devices can access camera');
+  } else if (baseUrl.startsWith('https://') || signalingUrl.startsWith('https://')) {
+    console.log('[ngrok-status] ⚠️ Partial HTTPS setup - Some mobile functionality may be limited');
+  } else {
+    console.log('[ngrok-status] ❌ No HTTPS URLs available - Mobile camera access blocked');
   }
 
   return res.status(200).json({ baseUrl, signalingUrl });

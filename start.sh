@@ -71,12 +71,15 @@ setup_ngrok() {
             echo "⏳ Waiting for ngrok to initialize..."
             sleep 5
             
-            # Get the HTTPS URL specifically
-            NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[] | select(.proto == "https") | .public_url')
+            # Get the HTTPS URL specifically - try v3 endpoints first, then v2 tunnels
+            NGROK_URL=$(curl -s http://localhost:4040/api/endpoints 2>/dev/null | jq -r '.endpoints[]? | select(.proto == "https") | .public_url' 2>/dev/null || curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq -r '.tunnels[]? | select(.proto == "https") | .public_url' 2>/dev/null)
             
             if [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ]; then
-                echo "⚠️ Failed to get ngrok HTTPS URL. Checking available tunnels..."
-                curl -s http://localhost:4040/api/tunnels | jq '.'
+                echo "⚠️ Failed to get ngrok HTTPS URL. Checking available endpoints and tunnels..."
+                echo "Endpoints:"
+                curl -s http://localhost:4040/api/endpoints 2>/dev/null | jq '.' || echo "No endpoints API available"
+                echo "Tunnels:"
+                curl -s http://localhost:4040/api/tunnels 2>/dev/null | jq '.' || echo "No tunnels API available"
                 kill $NGROK_PID 2>/dev/null || true
                 exit 1
             else

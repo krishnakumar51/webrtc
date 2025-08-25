@@ -1,30 +1,31 @@
-FROM node:18-bullseye
+# Slim Node.js image for backend (CPU-only ONNX)
+FROM node:18-slim
 
-# Install system dependencies required for ONNX runtime
+# Install system dependencies required by onnxruntime-node and curl for health checks
 RUN apt-get update && apt-get install -y \
     libc6 \
     libgcc-s1 \
     libstdc++6 \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy backend package files
 COPY backend/package*.json ./
 
-# Force CPU-only install to avoid GPU NuGet bug in onnxruntime-node 1.22.0
+# Force CPU-only install to avoid GPU artifacts
+ENV NODE_ENV=production
 ENV ONNXRUNTIME_PREFER_CPU=1
 
-# Install only required dependencies
-RUN npm ci --only=production --no-audit --no-fund
+# Install only production dependencies
+RUN npm ci --only=production --no-audit --no-fund && npm cache clean --force
 
-# Copy only the backend server file
+# Copy server and models only
 COPY backend/webrtc-server.js ./
+COPY public/models/ ./models/
 
-# Copy models directory
-COPY models/ ./models/
-
-# Expose port 8000 (avoiding Grafana on port 3000)
+# Expose signaling port
 EXPOSE 8000
 
 # Start the server

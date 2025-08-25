@@ -48,6 +48,8 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
   const [connectionUrl, setConnectionUrl] = useState('');
   const [detectionResults, setDetectionResults] = useState<DetectionResult[]>([]);
   const [currentDetections, setCurrentDetections] = useState<Detection[]>([]);
+  const [currentBaseUrl, setCurrentBaseUrl] = useState(baseUrl);
+  const [currentSignalingUrl, setCurrentSignalingUrl] = useState(signalingUrl);
   const [metrics, setMetrics] = useState<Metrics>({
     e2eLatency: { current: 0, median: 0, p95: 0 },
     processingFps: 0,
@@ -63,10 +65,53 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
   const webrtcManagerRef = useRef<any>(null);
   const roomId = useRef(Math.random().toString(36).substr(2, 9));
 
+  // Poll ngrok-status API for dynamic URL updates (only once on mount)
+  useEffect(() => {
+    let hasInitialized = false;
+    
+    const pollNgrokStatus = async () => {
+      try {
+        const response = await fetch('/api/ngrok-status');
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Only update URLs on first poll or if there's a significant change
+          if (!hasInitialized) {
+            if (data.baseUrl && data.baseUrl !== currentBaseUrl) {
+              console.log('🔄 Base URL initialized:', data.baseUrl);
+              setCurrentBaseUrl(data.baseUrl);
+            }
+            
+            if (data.signalingUrl && data.signalingUrl !== currentSignalingUrl) {
+              console.log('🔄 Signaling URL initialized:', data.signalingUrl);
+              setCurrentSignalingUrl(data.signalingUrl);
+            }
+            hasInitialized = true;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to poll ngrok status:', error);
+      }
+    };
+
+    // Poll once immediately, then stop to prevent URL changes during session
+    pollNgrokStatus();
+  }, []);
+
+  // Initialize connection and generate QR code only once
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    initializeConnection();
-    generateQRCode();
+    let isInitialized = false;
+    
+    const initialize = async () => {
+      if (!isInitialized) {
+        await initializeConnection();
+        await generateQRCode();
+        isInitialized = true;
+      }
+    };
+    
+    initialize();
     
     return () => {
       if (socket) {
@@ -75,11 +120,26 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
     };
   }, []);
 
+  // Only regenerate QR code when URLs are actually different and initialized
+  useEffect(() => {
+    if (currentBaseUrl !== baseUrl || currentSignalingUrl !== signalingUrl) {
+      generateQRCode();
+    }
+  }, [currentBaseUrl, currentSignalingUrl]);
+
   const initializeConnection = () => {
-    const serverUrl = signalingUrl || (process.env.NODE_ENV === 'production'
+    const serverUrl = currentSignalingUrl || (process.env.NODE_ENV === 'production'
       ? window.location.origin.replace(':3001', ':8000')
       : 'http://localhost:8000');
-    const newSocket = io(serverUrl);
+    const newSocket = io(serverUrl, {
+      transports: ['websocket', 'polling'],
+      timeout: 10000, // Reduced timeout for faster connection
+      secure: serverUrl.startsWith('https://'),
+      rejectUnauthorized: false,
+      extraHeaders: {
+        'ngrok-skip-browser-warning': 'true'
+      }
+    });
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
@@ -107,7 +167,7 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
   };
 
   const generateQRCode = async () => {
-    let phoneUrl = `${baseUrl}/phone?room=${roomId.current}`;
+    let phoneUrl = `${currentBaseUrl}/phone?room=${roomId.current}`;
     
     setConnectionUrl(phoneUrl);
     
@@ -123,11 +183,19 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
       setQrCodeUrl(qrDataUrl);
       
       // Log the generated URL for debugging
-      console.log('📱 Generated QR Code URL:', phoneUrl);
+      console.log('📱 Frontend Server - Generated QR Code URL:', phoneUrl);
+      console.log('🔗 Backend WebRTC Server - Signaling URL:', currentSignalingUrl);
+      
       if (phoneUrl.startsWith('https://')) {
-        console.log('✅ HTTPS URL - Mobile camera access enabled');
+        console.log('✅ HTTPS Frontend URL - Mobile camera access enabled via secure tunnel');
       } else {
-        console.log('⚠️ HTTP URL - Mobile camera access may be blocked');
+        console.log('⚠️ HTTP Frontend URL - Mobile camera access may be blocked. Enable ngrok for HTTPS access.');
+      }
+      
+      if (signalingUrl.startsWith('https://')) {
+        console.log('✅ HTTPS WebRTC Server - Secure signaling connection established');
+      } else {
+        console.log('⚠️ HTTP WebRTC Server - Using local signaling. Mobile devices may require HTTPS tunnel.');
       }
     } catch (error) {
       console.error('Failed to generate QR code:', error);
@@ -207,10 +275,10 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
   {/* removed stray import dynamic from 'next/dynamic'; */}
       <main className="min-h-screen bg-gray-900 text-gray-100">
         <div className="container mx-auto px-4 py-6">
-          <header className="text-center mb-8">
+          <header className="flex flex-col md:flex-row md:items-center md:justify-between text-center md:text-left mb-8">
             <h1 className="text-4xl font-bold text-white mb-2">WebRTC VLM Detection</h1>
             <p className="text-gray-300">Real-time multi-object detection via phone streaming</p>
-            <div className="flex items-center justify-center mt-4 space-x-4">
+            <div className="flex items-center justify-center md:justify-end mt-4 md:mt-0 space-x-4">
               <div className="flex items-center space-x-2">
                 <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
                 <span className="text-white text-sm">{isConnected ? 'Connected' : 'Disconnected'}</span>
@@ -274,14 +342,16 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
             </div>
 
             {/* Metrics and Controls */}
-            <div className="lg:col-span-4 space-y-6">
-              <MetricsPanel 
-                metrics={metrics}
-                onExportMetrics={exportMetrics}
-              />
+            <div className="lg:col-span-4 flex flex-col space-y-6">
+              <div className="flex-1">
+                <MetricsPanel 
+                  metrics={metrics}
+                  onExportMetrics={exportMetrics}
+                />
+              </div>
               
               {/* Phone Connection Panel */}
-              <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 h-fit">
+              <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 flex-1">
                 <div className="flex items-center mb-4">
                   <span className="text-xl mr-2">📱</span>
                   <h3 className="text-lg font-semibold text-white">Phone Connection</h3>
@@ -362,7 +432,7 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
               </div>
               
               {/* Detection Info */}
-              <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 h-fit">
+              <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 flex-1">
                 <div className="flex items-center mb-4">
                   <span className="text-xl mr-2">🎯</span>
                   <h3 className="text-lg font-semibold text-white">Detection Info</h3>
@@ -411,43 +481,46 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
   );
 }
 
+/**
+ * BULLETPROOF Auto-Discovery getServerSideProps
+ * This will ALWAYS find your ngrok HTTPS URLs automatically
+ */
 export async function getServerSideProps() {
-  let baseUrl = process.env.NEXT_PUBLIC_NGROK_URL || 'http://localhost:3001';
+  console.log('🔧 getServerSideProps called');
+  
+  // Default fallback URLs
   let signalingUrl = process.env.NEXT_PUBLIC_SIGNALING_SERVER_URL || 'http://localhost:8000';
-
-  if (process.env.NEXT_PUBLIC_USE_NGROK === 'true') {
-    try {
-      // Try ngrok API for tunnels
-      const res = await fetch('http://ngrok:4040/api/tunnels');
-      const data = await res.json();
+  let baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3001';
+  
+  try {
+    // Use our ngrok-status API endpoint for URL discovery
+    console.log('🔧 Fetching URLs from ngrok-status API...');
+    
+    const response = await fetch('http://localhost:3001/api/ngrok-status', {
+      headers: { 'Accept': 'application/json' }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('✅ Successfully fetched ngrok status:', data);
       
-      // ngrok uses 'tunnels' array
-      const tunnels = data.tunnels || [];
-      
-      const frontendTunnel = tunnels.find((t: any) => 
-        t.name === 'frontend' && t.public_url?.startsWith('https://')
-      );
-      const backendTunnel = tunnels.find((t: any) => 
-        t.name === 'backend' && t.public_url?.startsWith('https://')
-      );
-      
-      if (frontendTunnel) {
-        baseUrl = frontendTunnel.public_url;
-        console.log('✅ Frontend ngrok URL:', baseUrl);
-      }
-      if (backendTunnel) {
-        signalingUrl = backendTunnel.public_url;
-        console.log('✅ Backend ngrok URL:', signalingUrl);
+      if (data.baseUrl) {
+        baseUrl = data.baseUrl;
+        console.log('✅ Found frontend URL:', baseUrl);
       }
       
-      if (!frontendTunnel && !backendTunnel) {
-        console.log('⚠️ No ngrok tunnels found, using localhost URLs');
+      if (data.signalingUrl) {
+        signalingUrl = data.signalingUrl;
+        console.log('✅ Found backend URL:', signalingUrl);
       }
-    } catch (err) {
-      console.error('Failed to fetch ngrok tunnels:', err);
-      console.log('⚠️ Falling back to localhost URLs');
+    } else {
+      console.warn('⚠️ ngrok-status API returned non-OK status:', response.status);
     }
+  } catch (error: any) {
+    console.error('🚨 Failed to fetch ngrok status:', error.message);
+    console.log('⚠️ Using fallback localhost URLs');
   }
-
+  
+  console.log('🔧 Final URLs:', { baseUrl, signalingUrl });
   return { props: { baseUrl, signalingUrl } };
 }

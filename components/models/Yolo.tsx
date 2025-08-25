@@ -9,10 +9,10 @@ import { useEffect } from 'react';
 import { runModelUtils } from '../../utils';
 
 const RES_TO_MODEL: [number[], string][] = [
-  [[256, 256], 'yolov10n.onnx'],
-  [[256, 256], 'yolov7-tiny_256x256.onnx'],
-  [[320, 320], 'yolov7-tiny_320x320.onnx'],
-  [[640, 640], 'yolov7-tiny_640x640.onnx'],
+  [[640, 640], 'yolov10n.onnx'], // Server mode: Full precision model with 640x640 input
+  // [[256, 256], 'yolov7-tiny_256x256.onnx'],
+  // [[320, 320], 'yolov7-tiny_320x320.onnx'],
+  // [[640, 640], 'yolov7-tiny_640x640.onnx'],
 ];
 
 const Yolo = (props: any) => {
@@ -25,7 +25,7 @@ const Yolo = (props: any) => {
   useEffect(() => {
     const getSession = async () => {
       const session = await runModelUtils.createModelCpu(
-        `./_next/static/chunks/pages/${modelName}`
+        `/models/${modelName}` // Use models from models directory
       );
       setSession(session);
     };

@@ -24,10 +24,54 @@ const MODEL_PATH = path.join(__dirname, 'models', 'yolov10n.onnx');
 
 (async () => {
   try {
+    console.log('🔄 Backend WebRTC Server - Starting YOLO model loading...');
+    console.log('📁 Backend WebRTC Server - Model path:', MODEL_PATH);
+    
+    const startTime = Date.now();
     session = await ort.InferenceSession.create(MODEL_PATH);
-    console.log('Server YOLO model loaded');
+    const loadTime = Date.now() - startTime;
+    
+    console.log(`✅ Backend WebRTC Server - YOLO model loaded successfully in ${loadTime}ms`);
+    console.log('📊 Backend WebRTC Server - Model input names:', session.inputNames);
+    console.log('📊 Backend WebRTC Server - Model output names:', session.outputNames);
+    
+    // Log input/output shapes with defensive checks
+    console.log('🔍 Backend WebRTC Server - Checking session metadata availability...');
+    console.log('🔍 Backend WebRTC Server - session.inputMetadata exists:', !!session.inputMetadata);
+    console.log('🔍 Backend WebRTC Server - session.outputMetadata exists:', !!session.outputMetadata);
+    
+    if (session.inputMetadata) {
+      for (const inputName of session.inputNames) {
+        const inputMetadata = session.inputMetadata[inputName];
+        if (inputMetadata && inputMetadata.dims) {
+          console.log(`📐 Backend WebRTC Server - Input '${inputName}' shape:`, inputMetadata.dims);
+        } else {
+          console.log(`⚠️ Backend WebRTC Server - Input '${inputName}' metadata not available`);
+        }
+      }
+    } else {
+      console.log('⚠️ Backend WebRTC Server - inputMetadata is not available on session object');
+    }
+    
+    if (session.outputMetadata) {
+      for (const outputName of session.outputNames) {
+        const outputMetadata = session.outputMetadata[outputName];
+        if (outputMetadata && outputMetadata.dims) {
+          console.log(`📐 Backend WebRTC Server - Output '${outputName}' shape:`, outputMetadata.dims);
+        } else {
+          console.log(`⚠️ Backend WebRTC Server - Output '${outputName}' metadata not available`);
+        }
+      }
+    } else {
+      console.log('⚠️ Backend WebRTC Server - outputMetadata is not available on session object');
+    }
+    
+    console.log('🔧 Backend WebRTC Server - Ready for server-side inference');
   } catch (error) {
-    console.error('Failed to load server YOLO model:', error);
+    console.error('❌ Backend WebRTC Server - Failed to load YOLO model:', error);
+    console.error('❌ Backend WebRTC Server - Error stack:', error.stack);
+    console.error('❌ Backend WebRTC Server - Please check if the model file exists and is valid');
+    console.error('⚠️ Backend WebRTC Server - Server-side inference will not work');
   }
 })();
 
@@ -36,12 +80,22 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ["websocket", "polling"],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// Health check endpoint for Docker
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
 
 // Store active connections
 const connections = new Map();
@@ -50,7 +104,7 @@ const browserConnections = new Map();
 
 // WebRTC signaling
 io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  console.log(`🔗 Backend WebRTC Server - Client connected: ${socket.id} via ${socket.conn.transport.name}`);
   
   socket.on('join-room', (data) => {
     const { room, type } = data; // type: 'phone' or 'browser'
@@ -59,14 +113,27 @@ io.on('connection', (socket) => {
     
     if (type === 'phone') {
       phoneConnections.set(room, socket.id);
-      console.log(`Phone joined room: ${room}`);
+      console.log(`📱 Backend WebRTC Server - Phone joined room: ${room} (Mobile device connected)`);
     } else if (type === 'browser') {
       browserConnections.set(room, socket.id);
-      console.log(`Browser joined room: ${room}`);
+      console.log(`💻 Backend WebRTC Server - Browser joined room: ${room} (Desktop client connected)`);
     }
-    
-    // Notify other clients in the room
-    socket.to(room).emit('peer-joined', { peerId: socket.id, type });
+
+      // If a counterpart already exists, inform the newly joined client so it can connect immediately
+      if (type === 'browser') {
+        const existingPhoneId = phoneConnections.get(room);
+        if (existingPhoneId) {
+          socket.emit('peer-joined', { peerId: existingPhoneId, type: 'phone' });
+        }
+      } else if (type === 'phone') {
+        const existingBrowserId = browserConnections.get(room);
+        if (existingBrowserId) {
+          socket.emit('peer-joined', { peerId: existingBrowserId, type: 'browser' });
+        }
+      }
+      
+      // Notify all clients in the room, including the sender
+      io.to(room).emit('peer-joined', { peerId: socket.id, type });
   });
   
   // WebRTC signaling messages
@@ -85,16 +152,20 @@ io.on('connection', (socket) => {
   // Frame processing for server mode
   socket.on('process-frame', async (data) => {
     try {
-      const { frame_id, capture_ts, imageData, room } = data;
+      const { frame_id, capture_ts, imageData, width, height, room } = data;
       const recv_ts = Date.now();
       
       if (!session) throw new Error('Model not loaded');
       
-      const tensor = await preprocessImage(imageData);
+      console.log(`🔧 Backend WebRTC Server - Processing frame ${frame_id} at ${width}x${height}`);
+      
+      const tensor = await preprocessImage(imageData, width, height);
       const output = await runInference(session, tensor);
-      const detections = postprocessResults(output, imageData.width, imageData.height);
+      const detections = postprocessResults(output, width, height);
       
       const inference_ts = Date.now();
+      
+      console.log(`✅ Backend WebRTC Server - Frame ${frame_id} processed, found ${detections.length} detections`);
       
       const result = {
         frame_id,
@@ -110,77 +181,199 @@ io.on('connection', (socket) => {
       }
       
     } catch (error) {
-      console.error('Frame processing error:', error);
+      console.error('❌ Backend WebRTC Server - Frame processing error:', error);
       socket.emit('processing-error', { error: error.message });
     }
   });
 
 // Add these functions at the end
-async function preprocessImage(imageData) {
-  const targetSize = 320;
-  const buffer = Buffer.from(imageData.data);
-  const image = await Jimp.read(buffer);
-  image.resize(targetSize, targetSize);
+async function preprocessImage(base64ImageData, width, height) {
+  const targetSize = 640;
   
-  const pixels = image.bitmap.data;
-  const tensorData = new Float32Array(3 * targetSize * targetSize);
-  for (let i = 0; i < targetSize * targetSize; i++) {
-    const idx = i * 4;
-    const tIdx = i;
-    tensorData[tIdx] = pixels[idx] / 255.0; // R
-    tensorData[tIdx + targetSize * targetSize] = pixels[idx + 1] / 255.0; // G
-    tensorData[tIdx + 2 * targetSize * targetSize] = pixels[idx + 2] / 255.0; // B
+  try {
+    console.log(`🖼️ Backend WebRTC Server - Preprocessing image: ${width}x${height} -> ${targetSize}x${targetSize}`);
+    
+    // Validate input
+    if (!base64ImageData || typeof base64ImageData !== 'string') {
+      throw new Error('Invalid base64 image data provided');
+    }
+    
+    // Convert base64 data URL to buffer
+    const base64Data = base64ImageData.replace(/^data:image\/[a-z]+;base64,/, '');
+    console.log(`📏 Backend WebRTC Server - Base64 data length: ${base64Data.length} characters`);
+    
+    const buffer = Buffer.from(base64Data, 'base64');
+    console.log(`📦 Backend WebRTC Server - Buffer size: ${buffer.length} bytes`);
+    
+    // Load and process image with Jimp
+    console.log('🔄 Backend WebRTC Server - Loading image with Jimp...');
+    const image = await Jimp.read(buffer);
+    console.log(`📐 Backend WebRTC Server - Original image dimensions: ${image.bitmap.width}x${image.bitmap.height}`);
+    
+    // Ensure image is exactly 640x640 (should already be from frontend)
+    if (image.bitmap.width !== targetSize || image.bitmap.height !== targetSize) {
+      console.log(`🔧 Backend WebRTC Server - Resizing image from ${image.bitmap.width}x${image.bitmap.height} to ${targetSize}x${targetSize}`);
+      image.resize(targetSize, targetSize);
+    } else {
+      console.log('✅ Backend WebRTC Server - Image already at target size, no resizing needed');
+    }
+    
+    const pixels = image.bitmap.data;
+    console.log(`🎨 Backend WebRTC Server - Pixel data length: ${pixels.length} (expected: ${targetSize * targetSize * 4})`);
+    
+    const tensorData = new Float32Array(3 * targetSize * targetSize);
+    console.log('🔄 Backend WebRTC Server - Converting RGBA to RGB tensor...');
+    
+    // Convert RGBA to RGB and normalize to [0,1]
+    for (let i = 0; i < targetSize * targetSize; i++) {
+      const idx = i * 4; // RGBA format
+      const tIdx = i;
+      tensorData[tIdx] = pixels[idx] / 255.0; // R
+      tensorData[tIdx + targetSize * targetSize] = pixels[idx + 1] / 255.0; // G
+      tensorData[tIdx + 2 * targetSize * targetSize] = pixels[idx + 2] / 255.0; // B
+    }
+    
+    console.log(`✅ Backend WebRTC Server - Tensor created successfully: shape [1, 3, ${targetSize}, ${targetSize}]`);
+    console.log(`📊 Backend WebRTC Server - Tensor data range: [${Math.min(...tensorData).toFixed(3)}, ${Math.max(...tensorData).toFixed(3)}]`);
+    
+    return new ort.Tensor('float32', tensorData, [1, 3, targetSize, targetSize]);
+    
+  } catch (error) {
+    console.error('❌ Backend WebRTC Server - Error in preprocessImage:', error);
+    console.error('❌ Backend WebRTC Server - Error stack:', error.stack);
+    console.error('❌ Backend WebRTC Server - Input parameters:', { width, height, base64Length: base64ImageData?.length });
+    throw error;
   }
-  
-  return new ort.Tensor('float32', tensorData, [1, 3, targetSize, targetSize]);
 }
 
 async function runInference(session, tensor) {
-  const feeds = { [session.inputNames[0]]: tensor };
-  const results = await session.run(feeds);
-  return results[session.outputNames[0]];
+  try {
+    console.log('🧠 Backend WebRTC Server - Starting YOLO inference...');
+    console.log(`📊 Backend WebRTC Server - Input tensor shape: [${tensor.dims.join(', ')}]`);
+    console.log(`📊 Backend WebRTC Server - Input tensor type: ${tensor.type}`);
+    
+    if (!session) {
+      throw new Error('YOLO model session is not initialized');
+    }
+    
+    const startTime = Date.now();
+    const feeds = { [session.inputNames[0]]: tensor };
+    
+    console.log('🔄 Backend WebRTC Server - Running inference...');
+    const results = await session.run(feeds);
+    const inferenceTime = Date.now() - startTime;
+    
+    console.log(`⚡ Backend WebRTC Server - Inference completed in ${inferenceTime}ms`);
+    console.log('📊 Backend WebRTC Server - Output keys:', Object.keys(results));
+    
+    const outputTensor = results[session.outputNames[0]];
+    if (!outputTensor) {
+      console.error('❌ Backend WebRTC Server - No output tensor in inference results');
+      console.error('❌ Backend WebRTC Server - Available outputs:', Object.keys(results));
+      throw new Error('Missing expected output tensor from YOLO model');
+    }
+    
+    console.log(`📊 Backend WebRTC Server - Output tensor shape: [${outputTensor.dims.join(', ')}]`);
+    console.log(`📊 Backend WebRTC Server - Output data length: ${outputTensor.data.length}`);
+    
+    return outputTensor;
+    
+  } catch (error) {
+    console.error('❌ Backend WebRTC Server - Error in runInference:', error);
+    console.error('❌ Backend WebRTC Server - Error stack:', error.stack);
+    console.error('❌ Backend WebRTC Server - Session state:', session ? 'initialized' : 'null');
+    throw error;
+  }
 }
 
 function postprocessResults(output, originalWidth, originalHeight) {
-  const detections = [];
-  const data = output.data;
-  const [numBoxes, boxSize] = output.dims.slice(1);
-  
-  const candidates = [];
-  for (let i = 0; i < numBoxes; i++) {
-    const offset = i * boxSize;
-    const conf = data[offset + 4];
-    if (conf > 0.5) {
-      const classScores = Array.from(data.slice(offset + 5, offset + boxSize));
-      const maxClass = Math.max(...classScores);
-      const classId = classScores.indexOf(maxClass);
-      if (maxClass * conf > 0.25) {
-        const x = data[offset];
-        const y = data[offset + 1];
-        const w = data[offset + 2];
-        const h = data[offset + 3];
-        const xmin = Math.max(0, (x - w/2) / output.dims[3]);
-        const ymin = Math.max(0, (y - h/2) / output.dims[2]);
-        const xmax = Math.min(1, (x + w/2) / output.dims[3]);
-        const ymax = Math.min(1, (y + h/2) / output.dims[2]);
-        candidates.push({
-          label: YOLO_CLASSES[classId],
-          score: maxClass * conf,
-          xmin, ymin, xmax, ymax
-        });
+  try {
+    console.log('🔍 Backend WebRTC Server - Starting postprocessing...');
+    console.log(`📊 Backend WebRTC Server - Output tensor shape: [${output.dims.join(', ')}]`);
+    console.log(`📊 Backend WebRTC Server - Original image dimensions: ${originalWidth}x${originalHeight}`);
+    
+    const data = output.data;
+    const [numBoxes, boxSize] = output.dims.slice(1);
+    
+    console.log(`📦 Backend WebRTC Server - Processing ${numBoxes} boxes with ${boxSize} values each`);
+    console.log(`📊 Backend WebRTC Server - Data array length: ${data.length}`);
+    
+    const candidates = [];
+    let validBoxes = 0;
+    
+    for (let i = 0; i < numBoxes; i++) {
+      const offset = i * boxSize;
+      const conf = data[offset + 4];
+      
+      if (conf > 0.5) {
+        validBoxes++;
+        const classScores = Array.from(data.slice(offset + 5, offset + boxSize));
+        const maxClass = Math.max(...classScores);
+        const classId = classScores.indexOf(maxClass);
+        
+        if (maxClass * conf > 0.25) {
+          const x = data[offset];
+          const y = data[offset + 1];
+          const w = data[offset + 2];
+          const h = data[offset + 3];
+          const xmin = Math.max(0, (x - w/2) / 640);
+          const ymin = Math.max(0, (y - h/2) / 640);
+          const xmax = Math.min(1, (x + w/2) / 640);
+          const ymax = Math.min(1, (y + h/2) / 640);
+          
+          const detection = {
+            label: YOLO_CLASSES[classId] || `class_${classId}`,
+            score: maxClass * conf,
+            xmin, ymin, xmax, ymax
+          };
+          
+          candidates.push(detection);
+          
+          if (candidates.length <= 5) { // Log first few detections
+            console.log(`🎯 Backend WebRTC Server - Detection ${candidates.length}: ${detection.label} (${(detection.score * 100).toFixed(1)}%) at [${xmin.toFixed(3)}, ${ymin.toFixed(3)}, ${xmax.toFixed(3)}, ${ymax.toFixed(3)}]`);
+          }
+        }
       }
     }
+    
+    console.log(`📊 Backend WebRTC Server - Found ${validBoxes} boxes above confidence threshold`);
+    console.log(`📊 Backend WebRTC Server - Found ${candidates.length} candidate detections`);
+    
+    // Apply Non-Maximum Suppression
+    candidates.sort((a, b) => b.score - a.score);
+    const finalDetections = [];
+    let suppressedCount = 0;
+    
+    while (candidates.length > 0) {
+      const det = candidates.shift();
+      finalDetections.push(det);
+      
+      const beforeLength = candidates.length;
+      candidates = candidates.filter(c => iou(det, c) < 0.5);
+      suppressedCount += beforeLength - candidates.length;
+    }
+    
+    console.log(`🔧 Backend WebRTC Server - NMS suppressed ${suppressedCount} overlapping detections`);
+    console.log(`✅ Backend WebRTC Server - Final detections: ${finalDetections.length}`);
+    
+    // Log final detections
+    finalDetections.forEach((det, idx) => {
+      console.log(`🏷️ Backend WebRTC Server - Final detection ${idx + 1}: ${det.label} (${(det.score * 100).toFixed(1)}%)`);
+    });
+    
+    return finalDetections;
+    
+  } catch (error) {
+    console.error('❌ Backend WebRTC Server - Error in postprocessResults:', error);
+    console.error('❌ Backend WebRTC Server - Error stack:', error.stack);
+    console.error('❌ Backend WebRTC Server - Output tensor info:', {
+      dims: output?.dims,
+      dataLength: output?.data?.length,
+      originalWidth,
+      originalHeight
+    });
+    throw error;
   }
-  
-  candidates.sort((a, b) => b.score - a.score);
-  const finalDetections = [];
-  while (candidates.length > 0) {
-    const det = candidates.shift();
-    finalDetections.push(det);
-    candidates = candidates.filter(c => iou(det, c) < 0.5);
-  }
-  
-  return finalDetections;
 }
 
 function iou(box1, box2) {
@@ -215,7 +408,7 @@ function iou(box1, box2) {
         browserConnections.delete(room);
       }
       
-      socket.to(room).emit('peer-left', { peerId: socket.id, type });
+      io.to(room).emit('peer-left', { peerId: socket.id, type });
     }
     
     connections.delete(socket.id);
@@ -224,8 +417,13 @@ function iou(box1, box2) {
 });
 
 const PORT = process.env.PORT || 8000;
-server.listen(PORT, () => {
-  console.log(`🚀 WebRTC Server running on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Backend WebRTC Server - Running on ws://${server.address().address}:${PORT}`);
+  console.log(`🚀 Backend WebRTC Server - Running on port ${PORT}`);
+  console.log(`🔧 Backend WebRTC Server - Signaling server ready for WebRTC connections`);
+  console.log(`📱 Backend WebRTC Server - For mobile camera access, ensure HTTPS via ngrok tunnel`);
+  console.log(`🌐 Backend WebRTC Server - Local access: http://localhost:${PORT}`);
+  console.log(`✅ Backend WebRTC Server - Health check available at /health`);
 });
 
 module.exports = { app, server, io };

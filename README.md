@@ -210,6 +210,52 @@ npm start
 4. **Edge Deployment**: Use Cloudflare Workers or edge computing
 5. **Advanced NMS**: Better duplicate detection filtering
 
+## 📋 Deliverables
+
+### Required Submissions
+
+1. **1-Minute Loom Video Demonstration**
+   - Record a screen capture showing the complete workflow
+   - Start the application using `./start.sh`
+   - Connect your phone and demonstrate real-time object detection
+   - Show the detection overlay working on live video
+   - Include brief commentary explaining the key features
+   - Upload to Loom and include the link in your submission
+
+2. **Technical Report** (README appendix or separate `report.md`)
+   - **Design Choices**: Explain WebRTC vs WebSocket decision, WASM vs Server modes
+   - **Low-Resource Mode**: Detail frame thinning, resolution scaling, and adaptive sampling strategies
+   - **Backpressure Policy**: Describe queue management and frame dropping mechanisms
+   - **Performance Analysis**: Include benchmark results and latency breakdown
+   - **Challenges & Solutions**: Document any issues encountered and how they were resolved
+
+3. **Step-by-Step Run Instructions**
+   - Ensure the Quick Start section provides exact commands
+   - Test instructions on a fresh environment
+   - Include troubleshooting for common issues
+   - Verify ngrok setup works for mobile connectivity
+
+### Ngrok Setup for Phone Connectivity
+
+When Wi-Fi NAT blocks direct connections:
+
+1. **Install ngrok**: Download from https://ngrok.com/ or `npm install -g ngrok`
+2. **Get auth token**: Sign up at ngrok.com and copy your authtoken
+3. **Configure**: `ngrok authtoken YOUR_TOKEN_HERE`
+4. **Start with ngrok**: `USE_NGROK=true ./start.sh`
+5. **Mobile access**: Use the HTTPS URL provided in the console output
+
+**Alternative ngrok setup:**
+```bash
+# Set environment variable
+export NGROK_AUTHTOKEN=your_token_here
+
+# Start with ngrok enabled
+./start.sh --ngrok
+```
+
+The ngrok tunnel provides secure HTTPS access for mobile devices when local network connectivity is restricted.
+
 ## 📄 License
 
 MIT License - see LICENSE file for details.
