@@ -31,6 +31,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
   const processingFrame = useRef(false);
   const metricsInterval = useRef<NodeJS.Timeout | null>(null);
   const frameCounter = useRef(0);
+  const lastDetectionCount = useRef(0);
   const latencyHistory = useRef<number[]>([]);
   const bandwidthHistory = useRef<{timestamp: number, bytesSent: number, bytesReceived: number}[]>([]);
 
@@ -270,7 +271,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
     let detections: Detection[] = [];
     let inference_ts = recv_ts;
 
-    console.log(`🔄 Processing frame in ${mode.toUpperCase()} mode`);
+    // Only log when processing frames with detections (will be logged later if detections found)
 
     if (mode === 'wasm') {
       // Client-side inference using WASM - resize to 320x320
@@ -297,8 +298,11 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
         // Run YOLO inference
         detections = await runYoloInference(canvas);
         
+        // Only log when detections are found
         if (detections.length > 0) {
+          console.log(`🔄 Processing frame ${frameCounter.current} in WASM mode`);
           console.log(`🎯 WASM detected: ${detections.map(d => `${d.label} (${(d.score * 100).toFixed(1)}%)`).join(', ')}`);
+          lastDetectionCount.current = detections.length;
         }
         
       } catch (error) {
@@ -309,7 +313,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
       
     } else {
       // Server-side inference - resize to 640x640
-      console.log(`🖥️ SERVER mode: Processing frame via backend server`);
+      // Will log only when detections are received from server
       if (socket) {
         try {
           // Create canvas and load base64 image

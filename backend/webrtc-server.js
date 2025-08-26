@@ -262,15 +262,12 @@ io.on('connection', (socket) => {
       const { frame_id, capture_ts, imageData, width, height, room } = data;
       const recv_ts = Date.now();
       
-      console.log(`🔍 SERVER Detection Start - Frame ${frame_id}, Input: ${width}x${height}, Room: ${room}`);
-      
       if (!session) throw new Error('Model not loaded');
       
       // Throttle frame processing per room to prevent overload
       const lastProcessTime = frameProcessingQueue.get(room) || 0;
       if (recv_ts - lastProcessTime < FRAME_PROCESSING_INTERVAL) {
-        console.log(`⏭️ SERVER Skipping frame ${frame_id} due to throttling (${recv_ts - lastProcessTime}ms < ${FRAME_PROCESSING_INTERVAL}ms)`);
-        return; // Skip this frame to maintain performance
+        return; // Skip this frame to maintain performance (no logging to reduce spam)
       }
       frameProcessingQueue.set(room, recv_ts);
       
@@ -280,20 +277,15 @@ io.on('connection', (socket) => {
           const preprocessStart = Date.now();
           const tensor = await preprocessImage(imageData, width, height);
           const preprocessTime = Date.now() - preprocessStart;
-          console.log(`⚙️ SERVER Preprocessing: ${preprocessTime}ms, Tensor shape: [${tensor.dims.join(', ')}]`);
           
           const inferenceStart = Date.now();
           const output = await runInference(session, tensor);
           const inferenceTime = Date.now() - inferenceStart;
-          console.log(`🧠 SERVER Inference: ${inferenceTime}ms, Output shape: [${output.dims.join(', ')}]`);
           
           const postprocessStart = Date.now();
           const detections = postprocessResults(output, width, height);
           const postprocessTime = Date.now() - postprocessStart;
           const totalTime = Date.now() - recv_ts;
-          
-          console.log(`🔧 SERVER Postprocessing: ${postprocessTime}ms, Found ${detections.length} detections`);
-          console.log(`⏱️ SERVER Total Pipeline: ${totalTime}ms (preprocess: ${preprocessTime}ms, inference: ${inferenceTime}ms, postprocess: ${postprocessTime}ms)`);
           
           const inference_ts = Date.now();
           
@@ -305,16 +297,22 @@ io.on('connection', (socket) => {
             detections
           };
           
+          // Only log when detections are found to reduce console spam
           if (detections.length > 0) {
+            console.log(`🔍 SERVER Detection Start - Frame ${frame_id}, Input: ${width}x${height}, Room: ${room}`);
+            console.log(`⚙️ SERVER Preprocessing: ${preprocessTime}ms, Tensor shape: [${tensor.dims.join(', ')}]`);
+            console.log(`🧠 SERVER Inference: ${inferenceTime}ms, Output shape: [${output.dims.join(', ')}]`);
+            console.log(`🔧 SERVER Postprocessing: ${postprocessTime}ms, Found ${detections.length} detections`);
+            console.log(`⏱️ SERVER Total Pipeline: ${totalTime}ms (preprocess: ${preprocessTime}ms, inference: ${inferenceTime}ms, postprocess: ${postprocessTime}ms)`);
             console.log(`🎯 SERVER Detections: ${detections.map(d => `${d.label} (${(d.score * 100).toFixed(1)}% at [${d.xmin.toFixed(3)}, ${d.ymin.toFixed(3)}, ${d.xmax.toFixed(3)}, ${d.ymax.toFixed(3)}])`).join(', ')}`);
-          } else {
-            console.log('🔍 SERVER: No objects detected above threshold');
           }
           
           const browserSocketId = browserConnections.get(room);
           if (browserSocketId) {
             io.to(browserSocketId).emit('detection-result', result);
-            console.log(`📤 SERVER Sent results to browser for frame ${frame_id}`);
+            if (detections.length > 0) {
+              console.log(`📤 SERVER Sent results to browser for frame ${frame_id}`);
+            }
           } else {
             console.warn(`⚠️ SERVER No browser connection found for room ${room}`);
           }
@@ -410,7 +408,7 @@ function postprocessResults(output, originalWidth, originalHeight) {
       const score = data[offset + 4];
       const classId = Math.round(data[offset + 5]);
 
-      if (score > 0.45 && classId >= 0 && classId < YOLO_CLASSES.length) {
+      if (score > 0.5 && classId >= 0 && classId < YOLO_CLASSES.length) {
         const xmin = Math.max(0, Math.min(1, x0 / 640));
         const ymin = Math.max(0, Math.min(1, y0 / 640));
         const xmax = Math.max(0, Math.min(1, x1 / 640));

@@ -33,11 +33,21 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastDetectionsRef = useRef<Detection[]>([]);
   const animationFrameRef = useRef<number>();
+  const lastCanvasSizeRef = useRef({ width: 0, height: 0 });
 
   useEffect(() => {
     // Cancel any pending animation frame
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
+    }
+
+    // Skip rendering if detections haven't changed significantly
+    const detectionsChanged = !lastDetectionsRef.current || 
+      lastDetectionsRef.current.length !== detections.length ||
+      JSON.stringify(lastDetectionsRef.current) !== JSON.stringify(detections);
+
+    if (!detectionsChanged && detections.length > 0) {
+      return; // Skip unnecessary redraws
     }
 
     // Use requestAnimationFrame for smooth rendering
@@ -48,10 +58,16 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Set canvas size to match video
+      // Set canvas size to match video (only if changed)
       const rect = videoElement.getBoundingClientRect();
-      canvas.width = rect.width;
-      canvas.height = rect.height;
+      const newWidth = Math.floor(rect.width);
+      const newHeight = Math.floor(rect.height);
+      
+      if (canvas.width !== newWidth || canvas.height !== newHeight) {
+        canvas.width = newWidth;
+        canvas.height = newHeight;
+        lastCanvasSizeRef.current = { width: newWidth, height: newHeight };
+      }
 
       // Always clear the entire canvas first to remove old detections
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -65,70 +81,42 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       // Store current detections for comparison
       lastDetectionsRef.current = [...detections];
 
-    // Draw detection boxes
+      // Optimize canvas settings for better performance
+      ctx.imageSmoothingEnabled = false; // Disable antialiasing for better performance
+      ctx.textBaseline = 'top';
+
+    // Draw detection boxes with optimized rendering
+    ctx.lineWidth = 2;
+    ctx.font = '14px Arial, sans-serif';
+    
     detections.forEach((detection) => {
-      const x = detection.xmin * canvas.width;
-      const y = detection.ymin * canvas.height;
-      const width = (detection.xmax - detection.xmin) * canvas.width;
-      const height = (detection.ymax - detection.ymin) * canvas.height;
+      const x = Math.floor(detection.xmin * canvas.width);
+      const y = Math.floor(detection.ymin * canvas.height);
+      const width = Math.floor((detection.xmax - detection.xmin) * canvas.width);
+      const height = Math.floor((detection.ymax - detection.ymin) * canvas.height);
       
       // Get colors for this object class
       const colors = getClassColor(detection.label);
 
-      // Draw bounding box with rounded corners and shadow
-      ctx.save();
+      // Draw simple bounding box (no shadows or rounded corners for performance)
       ctx.strokeStyle = colors.box;
-      ctx.lineWidth = 3;
-      ctx.shadowColor = colors.box + '80'; // Add transparency
-      ctx.shadowBlur = 8;
-      ctx.beginPath();
-      const radius = 12;
-      ctx.moveTo(x + radius, y);
-      ctx.lineTo(x + width - radius, y);
-      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-      ctx.lineTo(x + width, y + height - radius);
-      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-      ctx.lineTo(x + radius, y + height);
-      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-      ctx.lineTo(x, y + radius);
-      ctx.quadraticCurveTo(x, y, x + radius, y);
-      ctx.closePath();
-      ctx.stroke();
-      ctx.restore();
+      ctx.strokeRect(x, y, width, height);
 
-      // Draw label background with glassmorphism effect (positioned at top baseline middle of bounding box)
-      const scorePercent = detection.score && isFinite(detection.score) ? (detection.score * 100).toFixed(1) : 'N/A';
+      // Draw simple label (optimized for performance)
+      const scorePercent = detection.score && isFinite(detection.score) ? (detection.score * 100).toFixed(0) : 'N/A';
       const label = `${detection.label} ${scorePercent}%`;
-      ctx.font = 'bold 16px Segoe UI, Arial, sans-serif';
       const textWidth = ctx.measureText(label).width;
-      const textHeight = 24;
-      const labelX = x + (width - textWidth) / 2 - 8; // Center horizontally on bounding box
-      const labelY = y - textHeight; // Position above the bounding box
-      ctx.save();
-      ctx.globalAlpha = 0.9;
+      const textHeight = 16;
+      const labelX = x;
+      const labelY = y - textHeight - 2;
+      
+      // Draw simple label background
       ctx.fillStyle = colors.bg;
-      ctx.filter = 'blur(0.5px)';
-      ctx.beginPath();
-      ctx.moveTo(labelX, labelY);
-      ctx.lineTo(labelX + textWidth + 16, labelY);
-      ctx.quadraticCurveTo(labelX + textWidth + 20, labelY, labelX + textWidth + 20, labelY + 8);
-      ctx.lineTo(labelX + textWidth + 20, labelY + textHeight - 8);
-      ctx.quadraticCurveTo(labelX + textWidth + 20, labelY + textHeight, labelX + textWidth + 16, labelY + textHeight);
-      ctx.lineTo(labelX, labelY + textHeight);
-      ctx.quadraticCurveTo(labelX - 4, labelY + textHeight, labelX - 4, labelY + textHeight - 8);
-      ctx.lineTo(labelX - 4, labelY + 8);
-      ctx.quadraticCurveTo(labelX - 4, labelY, labelX, labelY)
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-
+      ctx.fillRect(labelX, labelY, textWidth + 6, textHeight + 2);
+      
       // Draw label text
-      ctx.save();
       ctx.fillStyle = colors.text;
-      ctx.shadowColor = 'rgba(0,0,0,0.5)';
-      ctx.shadowBlur = 2;
-      ctx.fillText(label, labelX + 8, labelY + 16); // Position text inside label background
-      ctx.restore();
+      ctx.fillText(label, labelX + 3, labelY + 2);
     });
     });
 

@@ -2,6 +2,41 @@ import { InferenceSession, Tensor } from 'onnxruntime-web';
 
 let session: InferenceSession | null = null;
 
+// Memory optimization: Reusable canvas pool
+let canvasPool: HTMLCanvasElement[] = [];
+let tempCanvasPool: HTMLCanvasElement[] = [];
+let tensorDataPool: Float32Array[] = [];
+
+const getCanvas = (width: number, height: number): HTMLCanvasElement => {
+  let canvas = canvasPool.pop();
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+  }
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+};
+
+const returnCanvas = (canvas: HTMLCanvasElement) => {
+  if (canvasPool.length < 3) { // Limit pool size
+    canvasPool.push(canvas);
+  }
+};
+
+const getTensorData = (size: number): Float32Array => {
+  let data = tensorDataPool.pop();
+  if (!data || data.length !== size) {
+    data = new Float32Array(size);
+  }
+  return data;
+};
+
+const returnTensorData = (data: Float32Array) => {
+  if (tensorDataPool.length < 2) { // Limit pool size
+    tensorDataPool.push(data);
+  }
+};
+
 import { createModelCpu, runModel } from '../../utils/runModel';
 import * as ort from 'onnxruntime-web';
 
@@ -46,7 +81,7 @@ if (typeof window !== 'undefined') {
 
 // Streamlined inference pipeline - WASM mode uses regular model for compatibility
 export const MODEL_PATH = '/models/yolov10n.onnx'; // Regular model for better compatibility
-const MODEL_INPUT_SIZE = 640; // Input size for WASM mode (640x640)
+const MODEL_INPUT_SIZE = 640; // Input size for WASM mode (640x640) - required by YOLO model
 
 export const initYoloModel = async () => {
   if (!session) {
@@ -67,7 +102,8 @@ export const initYoloModel = async () => {
 
 export const runYoloModel = async (imageData: ImageData) => {
   const startTime = Date.now();
-  console.log(`🔍 WASM Detection Start - Input: ${imageData.width}x${imageData.height}`);
+  // Only log when detections are found to reduce console spam
+  let shouldLog = false; // Will be set to true if detections are found
   
   if (!session) {
     console.log('🔄 YOLO WASM - Session not initialized, loading model...');
@@ -83,25 +119,30 @@ export const runYoloModel = async (imageData: ImageData) => {
     const preprocessStart = Date.now();
     const tensor = await preprocessImage(imageData);
     const preprocessTime = Date.now() - preprocessStart;
-    console.log(`⚙️ WASM Preprocessing: ${preprocessTime}ms, Tensor shape: [${tensor.dims.join(', ')}]`);
     
     const inferenceStart = Date.now();
     const [output, inferenceTime] = await runModel(session, tensor);
     const actualInferenceTime = Date.now() - inferenceStart;
-    console.log(`🧠 WASM Inference: ${actualInferenceTime}ms, Output shape: [${output.dims.join(', ')}]`);
     
     const postprocessStart = Date.now();
     const detections = postprocessResults(output, imageData.width, imageData.height);
     const postprocessTime = Date.now() - postprocessStart;
     const totalTime = Date.now() - startTime;
     
-    console.log(`🔧 WASM Postprocessing: ${postprocessTime}ms, Found ${detections.length} detections`);
-    console.log(`⏱️ WASM Total Pipeline: ${totalTime}ms (preprocess: ${preprocessTime}ms, inference: ${actualInferenceTime}ms, postprocess: ${postprocessTime}ms)`);
+    // Return tensor data to pool for memory optimization
+    if (tensor.data instanceof Float32Array) {
+      returnTensorData(tensor.data as Float32Array);
+    }
     
+    // Only log when detections are found
     if (detections.length > 0) {
+      shouldLog = true;
+      console.log(`🔍 WASM Detection Start - Input: ${imageData.width}x${imageData.height}`);
+      console.log(`⚙️ WASM Preprocessing: ${preprocessTime}ms, Tensor shape: [${tensor.dims.join(', ')}]`);
+      console.log(`🧠 WASM Inference: ${actualInferenceTime}ms, Output shape: [${output.dims.join(', ')}]`);
+      console.log(`🔧 WASM Postprocessing: ${postprocessTime}ms, Found ${detections.length} detections`);
+      console.log(`⏱️ WASM Total Pipeline: ${totalTime}ms (preprocess: ${preprocessTime}ms, inference: ${actualInferenceTime}ms, postprocess: ${postprocessTime}ms)`);
       console.log(`🎯 WASM Detections: ${detections.map(d => `${d.label} (${(d.score * 100).toFixed(1)}% at [${d.xmin.toFixed(3)}, ${d.ymin.toFixed(3)}, ${d.xmax.toFixed(3)}, ${d.ymax.toFixed(3)}])`).join(', ')}`);
-    } else {
-      console.log('🔍 WASM: No objects detected above threshold');
     }
     
     return detections;
@@ -116,15 +157,12 @@ const preprocessImage = async (imageData: ImageData): Promise<ort.Tensor> => {
   const { width, height, data } = imageData;
   const targetSize = MODEL_INPUT_SIZE; // Use 640x640 for regular model
   
-  const canvas = document.createElement('canvas');
+  // Use canvas pool for memory optimization
+  const canvas = getCanvas(targetSize, targetSize);
   const ctx = canvas.getContext('2d')!;
-  canvas.width = targetSize;
-  canvas.height = targetSize;
   
-  const tempCanvas = document.createElement('canvas');
+  const tempCanvas = getCanvas(width, height);
   const tempCtx = tempCanvas.getContext('2d')!;
-  tempCanvas.width = width;
-  tempCanvas.height = height;
   tempCtx.putImageData(imageData, 0, 0);
   
   ctx.drawImage(tempCanvas, 0, 0, width, height, 0, 0, targetSize, targetSize);
@@ -132,16 +170,26 @@ const preprocessImage = async (imageData: ImageData): Promise<ort.Tensor> => {
   const resizedImageData = ctx.getImageData(0, 0, targetSize, targetSize);
   const pixels = resizedImageData.data;
   
-  const tensorData = new Float32Array(3 * targetSize * targetSize);
-  for (let i = 0; i < targetSize * targetSize; i++) {
+  // Use tensor data pool for memory optimization
+  const tensorDataSize = 3 * targetSize * targetSize;
+  const tensorData = getTensorData(tensorDataSize);
+  
+  // Optimized pixel processing with reduced function calls
+  const pixelCount = targetSize * targetSize;
+  const channelSize = pixelCount;
+  
+  for (let i = 0; i < pixelCount; i++) {
     const pixelIndex = i * 4;
-    const tensorIndex = i;
-    tensorData[tensorIndex] = pixels[pixelIndex] / 255.0; // R
-    tensorData[tensorIndex + targetSize * targetSize] = pixels[pixelIndex + 1] / 255.0; // G
-    tensorData[tensorIndex + 2 * targetSize * targetSize] = pixels[pixelIndex + 2] / 255.0; // B
+    tensorData[i] = pixels[pixelIndex] / 255.0; // R
+    tensorData[i + channelSize] = pixels[pixelIndex + 1] / 255.0; // G
+    tensorData[i + 2 * channelSize] = pixels[pixelIndex + 2] / 255.0; // B
   }
   
   const tensor = new ort.Tensor('float32', tensorData, [1, 3, targetSize, targetSize]);
+  
+  // Return canvases to pool
+  returnCanvas(canvas);
+  returnCanvas(tempCanvas);
   
   return tensor;
 };
@@ -182,14 +230,14 @@ const postprocessResults = (output: ort.Tensor, originalWidth: number, originalH
     const score = data[offset + 4];
     const classId = Math.round(data[offset + 5]);
     
-    if (score > 0.4) { // Confidence threshold
+    if (score > 0.45) { // Confidence threshold
       totalBoxesAboveConfThreshold++;
       
       if (i < 5) { // Log first 5 boxes for debugging
         console.log(`📦 WASM Box ${i}: score=${score.toFixed(3)}, classId=${classId}, class=${YOLO_CLASSES[classId] || 'unknown'}`);
       }
       
-      if (score > 0.4 && classId >= 0 && classId < YOLO_CLASSES.length) {
+      if (score > 0.45 && classId >= 0 && classId < YOLO_CLASSES.length) {
         totalBoxesAboveScoreThreshold++;
         
         // YOLOv10 already provides corner coordinates, just normalize to [0,1] range

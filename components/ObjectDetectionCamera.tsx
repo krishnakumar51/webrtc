@@ -84,11 +84,13 @@ const ObjectDetectionCamera = (props: {
     }
     liveDetection.current = true;
     let lastProcessTime = 0;
-    const targetFPS = 10; // Target 10 FPS for better performance
-    const frameInterval = 1000 / targetFPS;
+    let adaptiveTargetFPS = 10; // Start with 10 FPS
+    let processingTimes: number[] = [];
+    let frameSkipCount = 0;
     
     while (liveDetection.current) {
       const now = Date.now();
+      const frameInterval = 1000 / adaptiveTargetFPS;
       
       // Skip frames if we're processing too fast
       if (now - lastProcessTime < frameInterval) {
@@ -104,15 +106,41 @@ const ObjectDetectionCamera = (props: {
       
       try {
         await runModel(ctx);
-        setTotalTime(Date.now() - startTime);
+        const processingTime = Date.now() - startTime;
+        setTotalTime(processingTime);
+        
+        // Track processing times for adaptive adjustment
+        processingTimes.push(processingTime);
+        if (processingTimes.length > 10) {
+          processingTimes.shift(); // Keep only last 10 measurements
+        }
+        
+        // Adaptive FPS adjustment based on processing performance
+        if (processingTimes.length >= 5) {
+          const avgProcessingTime = processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length;
+          
+          if (avgProcessingTime > 200) {
+            // If processing takes > 200ms, reduce to 3 FPS
+            adaptiveTargetFPS = Math.max(3, adaptiveTargetFPS - 1);
+          } else if (avgProcessingTime > 150) {
+            // If processing takes > 150ms, reduce to 5 FPS
+            adaptiveTargetFPS = Math.max(5, adaptiveTargetFPS - 0.5);
+          } else if (avgProcessingTime < 100 && adaptiveTargetFPS < 10) {
+            // If processing is fast, gradually increase FPS
+            adaptiveTargetFPS = Math.min(10, adaptiveTargetFPS + 0.5);
+          }
+        }
+        
         lastProcessTime = Date.now();
       } catch (error) {
         console.error('Detection error:', error);
-        // Continue processing even if one frame fails
+        // Reduce FPS on errors to give system time to recover
+        adaptiveTargetFPS = Math.max(2, adaptiveTargetFPS - 1);
       }
       
-      // Small delay to prevent blocking the UI thread
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 10));
+      // Adaptive delay based on performance
+      const delay = adaptiveTargetFPS < 5 ? 50 : 10;
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), delay));
     }
   };
 

@@ -463,7 +463,11 @@ export default function Phone({ signalingUrl }: PhoneProps) {
     const frameId = `frame_${frameIdRef.current++}`;
     const captureStart = Date.now();
     
-    console.log(`📸 Phone - Starting frame capture ${frameId}`);
+    // Only log every 50th frame to reduce console spam
+    const shouldLogFrame = frameIdRef.current % 50 === 0;
+    if (shouldLogFrame) {
+      console.log(`📸 Phone - Starting frame capture ${frameId}`);
+    }
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -482,13 +486,17 @@ export default function Phone({ signalingUrl }: PhoneProps) {
     canvas.width = videoWidth;
     canvas.height = videoHeight;
     
-    console.log(`📐 Phone - Video dimensions: ${videoWidth}x${videoHeight}`);
+    if (shouldLogFrame) {
+      console.log(`📐 Phone - Video dimensions: ${videoWidth}x${videoHeight}`);
+    }
     
     // Draw current video frame to canvas at full resolution
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const drawTime = Date.now() - captureStart;
     
-    console.log(`🎨 Phone - Frame drawn to canvas in ${drawTime}ms`);
+    if (shouldLogFrame) {
+      console.log(`🎨 Phone - Frame drawn to canvas in ${drawTime}ms`);
+    }
     
     // Get image data
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -498,7 +506,9 @@ export default function Phone({ signalingUrl }: PhoneProps) {
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     const compressionTime = Date.now() - compressionStart;
     
-    console.log(`🗜️ Phone - Frame compressed in ${compressionTime}ms, size: ${(dataUrl.length / 1024).toFixed(1)}KB`);
+    if (shouldLogFrame) {
+      console.log(`🗜️ Phone - Frame compressed in ${compressionTime}ms, size: ${(dataUrl.length / 1024).toFixed(1)}KB`);
+    }
     
     const frameData = {
       frame_id: frameId,
@@ -510,7 +520,9 @@ export default function Phone({ signalingUrl }: PhoneProps) {
     };
 
     const jsonSize = JSON.stringify(frameData).length;
-    console.log(`📦 Phone - Frame data JSON size: ${(jsonSize / 1024).toFixed(1)}KB`);
+    if (shouldLogFrame) {
+      console.log(`📦 Phone - Frame data JSON size: ${(jsonSize / 1024).toFixed(1)}KB`);
+    }
 
     try {
       const sendStart = Date.now();
@@ -518,7 +530,9 @@ export default function Phone({ signalingUrl }: PhoneProps) {
       dataChannelRef.current.send(JSON.stringify(frameData));
       const sendTime = Date.now() - sendStart;
       
-      console.log(`📤 Phone - Frame ${frameId} sent successfully in ${sendTime}ms (total: ${Date.now() - captureStart}ms)`);
+      if (shouldLogFrame) {
+        console.log(`📤 Phone - Frame ${frameId} sent successfully in ${sendTime}ms (total: ${Date.now() - captureStart}ms)`);
+      }
       setFramesSent(prev => prev + 1);
     } catch (error) {
       console.error('❌ Phone - Error sending frame:', error);
