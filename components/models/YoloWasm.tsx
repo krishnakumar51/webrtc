@@ -182,14 +182,14 @@ const postprocessResults = (output: ort.Tensor, originalWidth: number, originalH
     const score = data[offset + 4];
     const classId = Math.round(data[offset + 5]);
     
-    if (score > 0.45) { // Confidence threshold
+    if (score > 0.4) { // Confidence threshold
       totalBoxesAboveConfThreshold++;
       
       if (i < 5) { // Log first 5 boxes for debugging
         console.log(`📦 WASM Box ${i}: score=${score.toFixed(3)}, classId=${classId}, class=${YOLO_CLASSES[classId] || 'unknown'}`);
       }
       
-      if (score > 0.45 && classId >= 0 && classId < YOLO_CLASSES.length) {
+      if (score > 0.4 && classId >= 0 && classId < YOLO_CLASSES.length) {
         totalBoxesAboveScoreThreshold++;
         
         // YOLOv10 already provides corner coordinates, just normalize to [0,1] range

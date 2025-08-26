@@ -4,11 +4,20 @@
 
 ## 🚀 Quick Start (One Command)
 
+⚡ Note:
+
+- Make sure to copy .env.example to .env and set your NGROK_AUTHTOKEN.
+
+- Keep Docker Desktop running before executing the commands.
+
+
+Bash / Linux / macOS terminal:
+
 ```bash
 ./start.sh
 ```
 
-Or with Docker:
+Or with Docker in CMD / PowerShell:
 
 ```bash
 docker-compose up --build

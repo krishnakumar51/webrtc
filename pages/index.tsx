@@ -8,7 +8,7 @@ import QRCode from 'qrcode';
 import WebRTCManager from '../components/WebRTCManager';
 import MetricsPanel from '../components/MetricsPanel';
 import DetectionOverlay from '../components/DetectionOverlay';
-// Removed ModeSelector component as requested
+import ModeSelector from '../components/ModeSelector';
 import NotificationSystem, { Notification } from '../components/NotificationSystem';
 
 import type { Detection } from '../types';
@@ -399,7 +399,7 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
                     <span className="text-white text-sm font-medium">{mode.toUpperCase()}</span>
                   </div>
                 </div>
-                {/* ModeSelector component removed as requested */}
+                <ModeSelector mode={mode} onModeChange={handleModeChange} />
               </div>
             </div>
           </header>

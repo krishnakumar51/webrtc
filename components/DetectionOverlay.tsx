@@ -78,27 +78,28 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       ctx.stroke();
       ctx.restore();
 
-      // Draw label background with glassmorphism effect (positioned at bottom of bounding box)
+      // Draw label background with glassmorphism effect (positioned at top baseline middle of bounding box)
       const scorePercent = detection.score && isFinite(detection.score) ? (detection.score * 100).toFixed(1) : 'N/A';
       const label = `${detection.label} ${scorePercent}%`;
       ctx.font = 'bold 16px Segoe UI, Arial, sans-serif';
       const textWidth = ctx.measureText(label).width;
       const textHeight = 24;
-      const labelY = y + height; // Position at bottom of bounding box
+      const labelX = x + (width - textWidth) / 2 - 8; // Center horizontally on bounding box
+      const labelY = y - textHeight; // Position above the bounding box
       ctx.save();
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = colors.bg;
       ctx.filter = 'blur(0.5px)';
       ctx.beginPath();
-      ctx.moveTo(x, labelY);
-      ctx.lineTo(x + textWidth + 16, labelY);
-      ctx.quadraticCurveTo(x + textWidth + 20, labelY, x + textWidth + 20, labelY + 8);
-      ctx.lineTo(x + textWidth + 20, labelY + textHeight - 8);
-      ctx.quadraticCurveTo(x + textWidth + 20, labelY + textHeight, x + textWidth + 16, labelY + textHeight);
-      ctx.lineTo(x, labelY + textHeight);
-      ctx.quadraticCurveTo(x - 4, labelY + textHeight, x - 4, labelY + textHeight - 8);
-      ctx.lineTo(x - 4, labelY + 8);
-      ctx.quadraticCurveTo(x - 4, labelY, x, labelY)
+      ctx.moveTo(labelX, labelY);
+      ctx.lineTo(labelX + textWidth + 16, labelY);
+      ctx.quadraticCurveTo(labelX + textWidth + 20, labelY, labelX + textWidth + 20, labelY + 8);
+      ctx.lineTo(labelX + textWidth + 20, labelY + textHeight - 8);
+      ctx.quadraticCurveTo(labelX + textWidth + 20, labelY + textHeight, labelX + textWidth + 16, labelY + textHeight);
+      ctx.lineTo(labelX, labelY + textHeight);
+      ctx.quadraticCurveTo(labelX - 4, labelY + textHeight, labelX - 4, labelY + textHeight - 8);
+      ctx.lineTo(labelX - 4, labelY + 8);
+      ctx.quadraticCurveTo(labelX - 4, labelY, labelX, labelY)
       ctx.closePath();
       ctx.fill();
       ctx.restore();
@@ -108,7 +109,7 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       ctx.fillStyle = colors.text;
       ctx.shadowColor = 'rgba(0,0,0,0.5)';
       ctx.shadowBlur = 2;
-      ctx.fillText(label, x + 8, labelY + 16); // Position text inside label background
+      ctx.fillText(label, labelX + 8, labelY + 16); // Position text inside label background
       ctx.restore();
     });
   }, [detections, videoElement]);

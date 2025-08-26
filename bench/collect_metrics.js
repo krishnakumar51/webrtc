@@ -1,71 +1,189 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
 
 async function main() {
   const [, , durationStr, mode, outputFile] = process.argv;
   const duration = parseInt(durationStr, 10) * 1000;
 
+  // Validate inputs
+  if (!durationStr || !mode || !outputFile) {
+    console.error('❌ Usage: node collect_metrics.js <duration> <mode> <output_file>');
+    process.exit(1);
+  }
+
+  if (isNaN(duration) || duration < 5000) {
+    console.error('❌ Duration must be a number >= 5 seconds');
+    process.exit(1);
+  }
+
+  if (!['wasm', 'server'].includes(mode)) {
+    console.error('❌ Mode must be "wasm" or "server"');
+    process.exit(1);
+  }
+
   console.log(`🚀 Starting benchmark: ${duration/1000}s duration, ${mode} mode`);
 
-  const browser = await puppeteer.launch({
-    headless: false, // Keep visible for debugging
+  const startTime = Date.now();
+  let browser;
+
+  // Optimized browser configuration for performance
+  browser = await puppeteer.launch({
+    headless: process.env.HEADLESS !== 'false', // Allow override via env var
     args: [
       '--use-fake-ui-for-media-stream', 
       '--use-fake-device-for-media-stream',
       '--allow-running-insecure-content',
       '--disable-web-security',
-      '--disable-features=VizDisplayCompositor'
-    ]
+      '--disable-features=VizDisplayCompositor',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu-sandbox',
+      '--disable-software-rasterizer',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-field-trial-config',
+      '--disable-back-forward-cache',
+      '--disable-ipc-flooding-protection',
+      '--memory-pressure-off'
+    ],
+    defaultViewport: { width: 1280, height: 720 },
+    timeout: 30000
   });
 
-  const browserPage = await browser.newPage();
+  let browserPage, phonePage;
   
-  // Enable console logging
-  browserPage.on('console', msg => {
-    if (msg.text().includes('Frontend WebRTC Manager') || msg.text().includes('YOLO')) {
-      console.log('Browser:', msg.text());
-    }
-  });
-  
-  await browserPage.goto('http://localhost:3001');
-  
-  // Wait for page to load
-  await browserPage.waitForTimeout(2000);
-
-  // Set mode
-  await browserPage.evaluate((selectedMode) => {
-    // Find and click the mode button
-    const modeButton = selectedMode === 'wasm' ? 
-      document.querySelector('button:contains("WASM Mode")') || document.querySelector('[data-mode="wasm"]') :
-      document.querySelector('button:contains("Server Mode")') || document.querySelector('[data-mode="server"]');
+  try {
+    browserPage = await browser.newPage();
     
-    if (modeButton) {
-      modeButton.click();
-      console.log(`Mode set to: ${selectedMode}`);
-    } else {
-      console.log('Mode button not found, using default');
+    // Enhanced console logging with filtering
+    browserPage.on('console', msg => {
+      const text = msg.text();
+      if (text.includes('Frontend WebRTC Manager') || 
+          text.includes('YOLO') || 
+          text.includes('Detection') ||
+          text.includes('Error') ||
+          text.includes('Warning')) {
+        console.log('Browser:', text);
+      }
+    });
+    
+    // Enhanced error handling for page errors
+    browserPage.on('pageerror', error => {
+      console.error('Browser page error:', error.message);
+    });
+    
+    browserPage.on('requestfailed', request => {
+      console.warn('Browser request failed:', request.url(), request.failure()?.errorText);
+    });
+    
+    console.log('🌐 Loading browser page...');
+    await browserPage.goto('http://localhost:3001', { 
+      waitUntil: 'networkidle2', 
+      timeout: 15000 
+    });
+    
+    // Wait for essential elements to load
+    await browserPage.waitForSelector('body', { timeout: 10000 });
+    
+    // Enhanced mode selection with better element detection
+    console.log(`🔧 Setting mode to: ${mode}`);
+    const modeSet = await browserPage.evaluate((selectedMode) => {
+      // Multiple strategies to find and click mode button
+      const strategies = [
+        () => {
+          const buttons = Array.from(document.querySelectorAll('button'));
+          return buttons.find(btn => 
+            btn.textContent.toLowerCase().includes(selectedMode.toLowerCase())
+          );
+        },
+        () => document.querySelector(`[data-mode="${selectedMode}"]`),
+        () => {
+          const buttons = Array.from(document.querySelectorAll('button'));
+          return selectedMode === 'wasm' ? 
+            buttons.find(btn => btn.textContent.includes('WASM')) :
+            buttons.find(btn => btn.textContent.includes('Server'));
+        }
+      ];
+      
+      for (const strategy of strategies) {
+        const button = strategy();
+        if (button) {
+          button.click();
+          console.log(`Mode button clicked: ${selectedMode}`);
+          return true;
+        }
+      }
+      
+      console.warn('Mode button not found, using default mode');
+      return false;
+    }, mode);
+    
+    if (modeSet) {
+      // Wait for mode change to take effect
+      await browserPage.waitForTimeout(1000);
     }
-  }, mode);
 
-  // Create phone page
-  const phonePage = await browser.newPage();
-  
-  phonePage.on('console', msg => {
-    if (msg.text().includes('Phone') || msg.text().includes('WebRTC')) {
-      console.log('Phone:', msg.text());
-    }
-  });
-  
-  // Get room ID from browser page
-  const roomId = await browserPage.evaluate(() => {
-    // Try different ways to get room ID
-    return window.roomId?.current || 
-           document.querySelector('[data-room-id]')?.getAttribute('data-room-id') ||
-           'default-room';
-  });
-  
-  console.log(`📱 Connecting phone to room: ${roomId}`);
-  await phonePage.goto(`http://localhost:3001/phone?room=${roomId}`);
+    // Create phone page with enhanced error handling
+    phonePage = await browser.newPage();
+    
+    // Enhanced phone page logging
+    phonePage.on('console', msg => {
+      const text = msg.text();
+      if (text.includes('Phone') || 
+          text.includes('WebRTC') ||
+          text.includes('Stream') ||
+          text.includes('Error') ||
+          text.includes('Warning')) {
+        console.log('Phone:', text);
+      }
+    });
+    
+    phonePage.on('pageerror', error => {
+      console.error('Phone page error:', error.message);
+    });
+    
+    phonePage.on('requestfailed', request => {
+      console.warn('Phone request failed:', request.url(), request.failure()?.errorText);
+    });
+    
+    // Get room ID with multiple fallback strategies
+    const roomId = await browserPage.evaluate(() => {
+      // Try different ways to get room ID
+      const strategies = [
+        () => window.roomId?.current,
+        () => document.querySelector('[data-room-id]')?.getAttribute('data-room-id'),
+        () => {
+          const url = new URL(window.location.href);
+          return url.searchParams.get('room');
+        },
+        () => {
+          // Generate a consistent room ID based on timestamp
+          const now = new Date();
+          return `bench-${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}-${now.getHours().toString().padStart(2,'0')}${now.getMinutes().toString().padStart(2,'0')}`;
+        }
+      ];
+      
+      for (const strategy of strategies) {
+        const id = strategy();
+        if (id && typeof id === 'string' && id.length > 0) {
+          return id;
+        }
+      }
+      
+      return 'benchmark-room';
+    });
+    
+    console.log(`📱 Connecting phone to room: ${roomId}`);
+    await phonePage.goto(`http://localhost:3001/phone?room=${roomId}`, {
+      waitUntil: 'networkidle2',
+      timeout: 15000
+    });
+    
+    // Wait for phone page to be ready
+    await phonePage.waitForSelector('body', { timeout: 10000 });
   
   // Wait for phone page to load
   await phonePage.waitForTimeout(2000);
@@ -107,7 +225,6 @@ async function main() {
     });
   }
 
-  const startTime = Date.now();
   const latencies = [];
   const serverLatencies = [];
   const networkLatencies = [];
@@ -336,7 +453,82 @@ async function main() {
   fs.writeFileSync(outputFile, JSON.stringify(metrics, null, 2));
   console.log(`💾 Metrics saved to: ${outputFile}`);
 
-  await browser.close();
+  } catch (error) {
+    console.error('❌ Benchmark failed with error:', error.message);
+    console.error('Stack trace:', error.stack);
+    
+    // Attempt to save partial results if any data was collected
+    if (latencies.length > 0 || framesProcessed > 0) {
+      console.log('💾 Attempting to save partial results...');
+      try {
+        const partialMetrics = {
+          benchmark: {
+            timestamp: new Date().toISOString(),
+            mode,
+            duration_seconds: (Date.now() - startTime) / 1000,
+            total_frames: framesProcessed,
+            frames_with_detections: framesWithDetections,
+            status: 'partial',
+            error: error.message
+          },
+          performance: latencies.length > 0 ? {
+            processed_fps: framesProcessed / ((Date.now() - startTime) / 1000),
+            e2e_latency: {
+              median_ms: latencies.sort((a, b) => a - b)[Math.floor(latencies.length / 2)] || 0,
+              samples: latencies.length
+            }
+          } : null
+        };
+        
+        const partialFile = outputFile.replace('.json', '_partial.json');
+        fs.writeFileSync(partialFile, JSON.stringify(partialMetrics, null, 2));
+        console.log(`💾 Partial results saved to: ${partialFile}`);
+      } catch (saveError) {
+        console.error('Failed to save partial results:', saveError.message);
+      }
+    }
+    
+    process.exit(1);
+  } finally {
+    // Ensure browser cleanup
+    try {
+      if (browser) {
+        console.log('🧹 Cleaning up browser resources...');
+        await browser.close();
+      }
+    } catch (cleanupError) {
+      console.error('Error during cleanup:', cleanupError.message);
+    }
+  }
 }
 
-main().catch(console.error);
+// Enhanced error handling for the main function
+main().catch((error) => {
+  console.error('❌ Fatal error in benchmark:', error.message);
+  console.error('Stack trace:', error.stack);
+  process.exit(1);
+});
+
+// Handle process termination gracefully
+process.on('SIGINT', () => {
+  console.log('\n🛑 Benchmark interrupted by user');
+  process.exit(130);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n🛑 Benchmark terminated');
+  process.exit(143);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught exception:', error.message);
+  console.error('Stack trace:', error.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled promise rejection at:', promise);
+  console.error('Reason:', reason);
+  process.exit(1);
+});
+
