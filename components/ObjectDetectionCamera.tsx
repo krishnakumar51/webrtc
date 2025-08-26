@@ -83,15 +83,36 @@ const ObjectDetectionCamera = (props: {
       return;
     }
     liveDetection.current = true;
+    let lastProcessTime = 0;
+    const targetFPS = 10; // Target 10 FPS for better performance
+    const frameInterval = 1000 / targetFPS;
+    
     while (liveDetection.current) {
+      const now = Date.now();
+      
+      // Skip frames if we're processing too fast
+      if (now - lastProcessTime < frameInterval) {
+        await new Promise<void>((resolve) => 
+          setTimeout(() => resolve(), frameInterval - (now - lastProcessTime))
+        );
+        continue;
+      }
+      
       const startTime = Date.now();
       const ctx = capture();
       if (!ctx) return;
-      await runModel(ctx);
-      setTotalTime(Date.now() - startTime);
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => resolve())
-      );
+      
+      try {
+        await runModel(ctx);
+        setTotalTime(Date.now() - startTime);
+        lastProcessTime = Date.now();
+      } catch (error) {
+        console.error('Detection error:', error);
+        // Continue processing even if one frame fails
+      }
+      
+      // Small delay to prevent blocking the UI thread
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 10));
     }
   };
 
@@ -100,16 +121,8 @@ const ObjectDetectionCamera = (props: {
     const ctx = capture();
     if (!ctx) return;
 
-    // create a copy of the canvas
-    const boxCtx = document
-      .createElement('canvas')
-      .getContext('2d') as CanvasRenderingContext2D;
-    boxCtx.canvas.width = ctx.canvas.width;
-    boxCtx.canvas.height = ctx.canvas.height;
-    boxCtx.drawImage(ctx.canvas, 0, 0);
-
-    await runModel(boxCtx);
-    ctx.drawImage(boxCtx.canvas, 0, 0, ctx.canvas.width, ctx.canvas.height);
+    // Use the same canvas context to avoid unnecessary copying
+    await runModel(ctx);
   };
 
   const reset = async () => {

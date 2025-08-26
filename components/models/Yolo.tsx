@@ -181,25 +181,42 @@ function postprocessYolov10(
   const dx = ctx.canvas.width / modelResolution[0];
   const dy = ctx.canvas.height / modelResolution[1];
 
+  // Clear canvas once at the beginning
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   let x0, y0, x1, y1, cls_id, score;
+  const validDetections = [];
 
+  // First pass: collect valid detections
   for (let i = 0; i < tensor.dims[1]; i += 6) {
     [x0, y0, x1, y1, score, cls_id] = tensor.data.slice(i, i + 6);
-    if ((score as any) < 0.25) {
+    if (Number(score) < 0.25) {
       break;
     }
+    validDetections.push({ 
+      x0: Number(x0), 
+      y0: Number(y0), 
+      x1: Number(x1), 
+      y1: Number(y1), 
+      score: Number(score), 
+      cls_id: Number(cls_id) 
+    });
+  }
+
+  // Batch drawing operations for better performance
+  ctx.save();
+  
+  for (const detection of validDetections) {
+    const { x0: rawX0, y0: rawY0, x1: rawX1, y1: rawY1, score: rawScore, cls_id: rawClsId } = detection;
 
     // scale to canvas size
-    [x0, x1] = [x0, x1].map((x: any) => x * dx);
-    [y0, y1] = [y0, y1].map((x: any) => x * dy);
-
-    [x0, y0, x1, y1, cls_id] = [x0, y0, x1, y1, cls_id].map((x: any) =>
-      round(x)
-    );
-
-    [score] = [score].map((x: any) => round(x * 100, 1));
+    const x0 = round(rawX0 * dx);
+    const y0 = round(rawY0 * dy);
+    const x1 = round(rawX1 * dx);
+    const y1 = round(rawY1 * dy);
+    const cls_id = round(rawClsId);
+    const score = round(rawScore * 100, 1);
+    
     const label =
       yoloClasses[cls_id].toString()[0].toUpperCase() +
       yoloClasses[cls_id].toString().substring(1) +
@@ -208,17 +225,22 @@ function postprocessYolov10(
       '%';
     const color = conf2color(score / 100);
 
+    // Draw bounding box
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    
+    // Draw label
     ctx.font = '20px Arial';
     ctx.fillStyle = color;
     ctx.fillText(label, x0, y0 - 5);
 
-    // fillrect with transparent color
+    // Draw transparent fill
     ctx.fillStyle = color.replace(')', ', 0.2)').replace('rgb', 'rgba');
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
   }
+  
+  ctx.restore();
 }
 
 function postprocessYolov7(
@@ -230,24 +252,43 @@ function postprocessYolov7(
   const dx = ctx.canvas.width / modelResolution[0];
   const dy = ctx.canvas.height / modelResolution[1];
 
+  // Clear canvas once at the beginning
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   let batch_id, x0, y0, x1, y1, cls_id, score;
+  const validDetections = [];
+
+  // First pass: collect valid detections
   for (let i = 0; i < tensor.dims[0]; i++) {
     [batch_id, x0, y0, x1, y1, cls_id, score] = tensor.data.slice(
       i * 7,
       i * 7 + 7
     );
+    validDetections.push({ 
+      batch_id: Number(batch_id), 
+      x0: Number(x0), 
+      y0: Number(y0), 
+      x1: Number(x1), 
+      y1: Number(y1), 
+      cls_id: Number(cls_id), 
+      score: Number(score) 
+    });
+  }
+
+  // Batch drawing operations for better performance
+  ctx.save();
+  
+  for (const detection of validDetections) {
+    const { batch_id: rawBatchId, x0: rawX0, y0: rawY0, x1: rawX1, y1: rawY1, cls_id: rawClsId, score: rawScore } = detection;
 
     // scale to canvas size
-    [x0, x1] = [x0, x1].map((x: any) => x * dx);
-    [y0, y1] = [y0, y1].map((x: any) => x * dy);
-
-    [x0, y0, x1, y1, cls_id] = [x0, y0, x1, y1, cls_id].map((x: any) =>
-      round(x)
-    );
-
-    [score] = [score].map((x: any) => round(x * 100, 1));
+    const x0 = round(rawX0 * dx);
+    const y0 = round(rawY0 * dy);
+    const x1 = round(rawX1 * dx);
+    const y1 = round(rawY1 * dy);
+    const cls_id = round(rawClsId);
+    const score = round(rawScore * 100, 1);
+    
     const label =
       yoloClasses[cls_id].toString()[0].toUpperCase() +
       yoloClasses[cls_id].toString().substring(1) +
@@ -256,15 +297,20 @@ function postprocessYolov7(
       '%';
     const color = conf2color(score / 100);
 
+    // Draw bounding box
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    
+    // Draw label
     ctx.font = '20px Arial';
     ctx.fillStyle = color;
     ctx.fillText(label, x0, y0 - 5);
 
-    // fillrect with transparent color
+    // Draw transparent fill
     ctx.fillStyle = color.replace(')', ', 0.2)').replace('rgb', 'rgba');
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
   }
+  
+  ctx.restore();
 }

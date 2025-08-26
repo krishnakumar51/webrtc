@@ -31,21 +31,39 @@ interface DetectionOverlayProps {
 
 const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoElement }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lastDetectionsRef = useRef<Detection[]>([]);
+  const animationFrameRef = useRef<number>();
 
   useEffect(() => {
-    if (!canvasRef.current || !videoElement) return;
+    // Cancel any pending animation frame
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
 
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    // Use requestAnimationFrame for smooth rendering
+    animationFrameRef.current = requestAnimationFrame(() => {
+      if (!canvasRef.current || !videoElement) return;
 
-    // Set canvas size to match video
-    const rect = videoElement.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-    // Clear previous drawings
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Set canvas size to match video
+      const rect = videoElement.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+
+      // Always clear the entire canvas first to remove old detections
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // If no detections, just return after clearing
+      if (!detections || detections.length === 0) {
+        lastDetectionsRef.current = [];
+        return;
+      }
+
+      // Store current detections for comparison
+      lastDetectionsRef.current = [...detections];
 
     // Draw detection boxes
     detections.forEach((detection) => {
@@ -112,6 +130,14 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       ctx.fillText(label, labelX + 8, labelY + 16); // Position text inside label background
       ctx.restore();
     });
+    });
+
+    // Cleanup function
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
   }, [detections, videoElement]);
 
   useEffect(() => {

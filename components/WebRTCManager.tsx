@@ -175,16 +175,17 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
         
         // Process frames for detection if detection is active
         if (isDetecting.current) {
-          // Add to frame queue with limit
-          frameQueue.current.push(frameData);
-          if (frameQueue.current.length > 5) {
-            frameQueue.current.shift(); // Drop old frames
+          // Aggressive frame dropping for better performance
+          if (processingFrame.current) {
+            // Skip this frame if we're still processing the previous one
+            return;
           }
+          
+          // Clear queue and only keep the latest frame
+          frameQueue.current = [frameData];
 
-          // Process frames
-          if (!processingFrame.current) {
-            processFrameQueue();
-          }
+          // Process frames immediately
+          processFrameQueue();
         }
       } catch (error) {
         console.error('Error processing frame:', error);
@@ -237,24 +238,29 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
     try {
       const result = await processFrame(frameData);
       
-      // Send result back via data channel or socket
+      // Send result back via data channel or socket (non-blocking)
       if (dataChannel.current && dataChannel.current.readyState === 'open') {
-        dataChannel.current.send(JSON.stringify(result));
+        try {
+          dataChannel.current.send(JSON.stringify(result));
+        } catch (sendError) {
+          console.warn('Failed to send detection result:', sendError);
+        }
       }
       
       frameCounter.current++;
-      await updateLatencyMetrics(result);
+      // Update metrics asynchronously to avoid blocking
+      updateLatencyMetrics(result).catch(error => 
+        console.warn('Metrics update failed:', error)
+      );
       
     } catch (error) {
       console.error('Frame processing error:', error);
+    } finally {
+      processingFrame.current = false;
     }
     
-    processingFrame.current = false;
-    
-    // Process next frame
-    if (frameQueue.current.length > 0) {
-      requestAnimationFrame(() => processFrameQueue());
-    }
+    // Don't process next frame automatically - let new frames trigger processing
+    // This prevents backlog buildup and reduces latency
   };
 
   const processFrame = async (frameData: any): Promise<any> => {
