@@ -270,16 +270,20 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
-  // Simple mode switching
+  // Simple mode switching with detection check
   const handleModeChange = (newMode: 'wasm' | 'server') => {
-    console.log(`🔄 Switching mode to ${newMode}`);
-    
-    // Stop detection if running
-    if (isDetecting && webrtcManagerRef.current) {
-      webrtcManagerRef.current.stopDetection();
-      setIsDetecting(false);
+    // Prevent mode switching if detection is running
+    if (isDetecting) {
+      addNotification({
+        type: 'warning',
+        title: 'Cannot Switch Mode',
+        message: 'Please stop detection before switching modes.',
+        duration: 4000
+      });
+      return;
     }
     
+    console.log(`🔄 Switching mode to ${newMode}`);
     setMode(newMode);
     
     // Initialize server model when switching to server mode

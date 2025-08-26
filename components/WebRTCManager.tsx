@@ -34,6 +34,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
   const lastDetectionCount = useRef(0);
   const latencyHistory = useRef<number[]>([]);
   const bandwidthHistory = useRef<{timestamp: number, bytesSent: number, bytesReceived: number}[]>([]);
+  const frameTimestamps = useRef<number[]>([]);
 
   useImperativeHandle(ref, () => ({
     startDetection: () => {
@@ -198,33 +199,34 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
     if (!videoRef.current) return;
     
     try {
-      // Create or get the display canvas
+      // Create or get the display canvas (cached for performance)
       let displayCanvas = videoRef.current.parentElement?.querySelector('.display-canvas') as HTMLCanvasElement;
       if (!displayCanvas) {
         displayCanvas = document.createElement('canvas');
         displayCanvas.className = 'display-canvas';
-        // Place this below DetectionOverlay (z-index 10) but above video (default stacking)
         displayCanvas.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;';
         videoRef.current.parentElement?.appendChild(displayCanvas);
-        
-        // Do NOT hide the video; keep it visible in case track rendering is used
         videoRef.current.style.opacity = '';
       }
       
-      const img = new Image();
-      img.onload = () => {
-        const ctx = displayCanvas.getContext('2d')!;
-        
-        // Set canvas size to match container
-        const rect = displayCanvas.getBoundingClientRect();
-        displayCanvas.width = rect.width;
-        displayCanvas.height = rect.height;
-        
-        // Draw the frame to fill the canvas
-        ctx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
-        ctx.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
-      };
-      img.src = base64ImageData;
+      // Use requestAnimationFrame for smoother rendering
+      requestAnimationFrame(() => {
+        const img = new Image();
+        img.onload = () => {
+          const ctx = displayCanvas.getContext('2d')!;
+          
+          // Only resize canvas if dimensions changed (performance optimization)
+          const rect = displayCanvas.getBoundingClientRect();
+          if (displayCanvas.width !== rect.width || displayCanvas.height !== rect.height) {
+            displayCanvas.width = rect.width;
+            displayCanvas.height = rect.height;
+          }
+          
+          // Use faster rendering method
+          ctx.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
+        };
+        img.src = base64ImageData;
+      });
     } catch (error) {
       console.error('Error displaying frame:', error);
     }
@@ -249,6 +251,15 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
       }
       
       frameCounter.current++;
+    
+    // Track frame timestamp for FPS calculation
+    const now = Date.now();
+    frameTimestamps.current.push(now);
+    
+    // Keep only last 100 frame timestamps (for memory efficiency)
+    if (frameTimestamps.current.length > 100) {
+      frameTimestamps.current.shift();
+    }
       // Update metrics asynchronously to avoid blocking
       updateLatencyMetrics(result).catch(error => 
         console.warn('Metrics update failed:', error)
@@ -258,10 +269,18 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
       console.error('Frame processing error:', error);
     } finally {
       processingFrame.current = false;
+      
+      // Clean up frame data to prevent memory leaks
+      if (frameData && frameData.imageData) {
+        frameData.imageData = null;
+      }
     }
     
-    // Don't process next frame automatically - let new frames trigger processing
-    // This prevents backlog buildup and reduces latency
+    // Process next frame if queue has items (optimized processing)
+    if (frameQueue.current.length > 0) {
+      // Use setTimeout to prevent blocking the main thread
+      setTimeout(() => processFrameQueue(), 0);
+    }
   };
 
   const processFrame = async (frameData: any): Promise<any> => {
@@ -274,29 +293,35 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
     // Only log when processing frames with detections (will be logged later if detections found)
 
     if (mode === 'wasm') {
-      // Client-side inference using WASM - resize to 320x320
-      // Starting WASM inference
-      const inference_start = Date.now();
-      
-      try {
-        // Create canvas and load base64 image
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d')!;
-        const img = new Image();
+      // Client-side inference using WASM - optimized pipeline
+        const inference_start = Date.now();
         
-        await new Promise((resolve, reject) => {
-          img.onload = () => resolve(null);
-          img.onerror = reject;
-          img.src = imageData; // base64 data URL
-        });
-        
-        // Resize to 640x640 for WASM YOLO model (yolov10n.onnx)
-         canvas.width = 640;
-         canvas.height = 640;
-         ctx.drawImage(img, 0, 0, 640, 640);
-        
-        // Run YOLO inference
-        detections = await runYoloInference(canvas);
+        try {
+          // Use OffscreenCanvas for better performance (if available)
+          const canvas = typeof OffscreenCanvas !== 'undefined' 
+            ? new OffscreenCanvas(640, 640)
+            : document.createElement('canvas');
+          
+          if (canvas instanceof HTMLCanvasElement) {
+            canvas.width = 640;
+            canvas.height = 640;
+          }
+          
+          const ctx = canvas.getContext('2d')!;
+          const img = new Image();
+          
+          // Optimize image loading with faster decode
+          await new Promise((resolve, reject) => {
+            img.onload = () => resolve(null);
+            img.onerror = reject;
+            img.src = imageData;
+          });
+          
+          // Use faster drawing method
+          (ctx as OffscreenCanvasRenderingContext2D).drawImage(img, 0, 0, 640, 640);
+          
+          // Run YOLO inference with canvas
+          detections = await runYoloInference(canvas as HTMLCanvasElement);
         
         // Only log when detections are found
         if (detections.length > 0) {
@@ -338,13 +363,16 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
           const processed = await new Promise<any>((resolve) => {
             const timeout = setTimeout(() => {
               resolve({ detections: [], inference_ts: Date.now() });
-            }, 200); // Increased timeout for server processing
+            }, 150); // Reduced timeout for faster fallback
             
-            socket.once('detection-result', (result) => {
+            const resultHandler = (result: any) => {
               clearTimeout(timeout);
               resolve(result);
-            });
+            };
             
+            socket.once('detection-result', resultHandler);
+            
+            // Send frame for processing
             socket.emit('process-frame', {
               frame_id,
               capture_ts,
@@ -401,6 +429,22 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
       console.error('❌ YOLO inference error:', error);
       return [];
     }
+  };
+
+  const calculateFPS = () => {
+    const now = Date.now();
+    const windowMs = 10000; // 10 second window
+    
+    // Remove timestamps older than window
+    frameTimestamps.current = frameTimestamps.current.filter(timestamp => now - timestamp <= windowMs);
+    
+    if (frameTimestamps.current.length < 2) return 0;
+    
+    // Calculate FPS based on actual frame timestamps
+    const timeSpanMs = frameTimestamps.current[frameTimestamps.current.length - 1] - frameTimestamps.current[0];
+    const timeSpanSeconds = timeSpanMs / 1000;
+    
+    return timeSpanSeconds > 0 ? (frameTimestamps.current.length - 1) / timeSpanSeconds : 0;
   };
 
   const updateLatencyMetrics = async (result: any) => {
@@ -460,16 +504,22 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
         
         // Calculate bandwidth rate if we have at least 2 measurements
         if (bandwidthHistory.current.length >= 2) {
+          // Use consecutive measurements to avoid WebRTC stats reset issues
           const latest = bandwidthHistory.current[bandwidthHistory.current.length - 1];
-          const previous = bandwidthHistory.current[0];
+          const previous = bandwidthHistory.current[bandwidthHistory.current.length - 2];
           
           const timeDiffSeconds = (latest.timestamp - previous.timestamp) / 1000;
           const bytesSentDiff = latest.bytesSent - previous.bytesSent;
           const bytesReceivedDiff = latest.bytesReceived - previous.bytesReceived;
           
           if (timeDiffSeconds > 0) {
-            uplink = (bytesSentDiff * 8) / (timeDiffSeconds * 1000); // kbps
-            downlink = (bytesReceivedDiff * 8) / (timeDiffSeconds * 1000); // kbps
+            // Calculate raw bandwidth and clamp negative values to zero
+            const rawUplink = (bytesSentDiff * 8) / (timeDiffSeconds * 1000); // kbps
+            const rawDownlink = (bytesReceivedDiff * 8) / (timeDiffSeconds * 1000); // kbps
+            
+            // Clamp negative values to zero (can happen when WebRTC stats reset)
+            uplink = Math.max(0, rawUplink);
+            downlink = Math.max(0, rawDownlink);
           }
         }
       } catch (error) {
@@ -483,7 +533,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
         median,
         p95
       },
-      processingFps: frameCounter.current / 30, // Assuming 30s window
+      processingFps: calculateFPS(),
       uplink,
       downlink,
       serverLatency: result.inference_ts - result.recv_ts,
@@ -498,8 +548,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
     bandwidthHistory.current = [];
     
     metricsInterval.current = setInterval(() => {
-      // Reset frame counter every 30 seconds for FPS calculation
-      frameCounter.current = 0;
+      // Frame counter no longer reset - using timestamp-based FPS calculation
     }, 30000);
   };
 
