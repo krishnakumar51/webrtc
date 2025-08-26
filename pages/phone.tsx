@@ -275,6 +275,7 @@ export default function Phone({ signalingUrl }: PhoneProps) {
       timeout: 10000,
       secure: currentSignalingUrl.startsWith('https://'),
       rejectUnauthorized: false,
+      withCredentials: true, // Important for CORS with credentials
       path: '/socket.io',
       extraHeaders: {
         'ngrok-skip-browser-warning': 'true',

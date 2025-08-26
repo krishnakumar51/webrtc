@@ -162,6 +162,7 @@ export default function Home({ baseUrl, signalingUrl }: HomeProps) {
       reconnectionAttempts: 5,
       secure: serverUrl.startsWith('https://'),
       rejectUnauthorized: false,
+      withCredentials: true, // Important for CORS with credentials
       extraHeaders: {
         'ngrok-skip-browser-warning': 'true'
       }

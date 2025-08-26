@@ -64,9 +64,17 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-    credentials: true
+    origin: [
+      "http://localhost:3001",
+      "https://localhost:3001",
+      "https://f1f2e7b18e93.ngrok-free.app", // Specific URL from error
+      /^https:\/\/[a-z0-9]+\.ngrok-free\.app$/,
+      /^https:\/\/[a-z0-9]+\.ngrok\.io$/,
+      /^https:\/\/[a-z0-9-]+\.ngrok\.app$/
+    ],
+    methods: ["GET", "POST", "OPTIONS"],
+    credentials: true,
+    allowedHeaders: ["ngrok-skip-browser-warning", "Content-Type", "Authorization", "Origin", "X-Requested-With", "Accept"]
   },
   transports: ["websocket", "polling"],
   allowEIO3: true,
@@ -74,12 +82,122 @@ const io = socketIo(server, {
   pingInterval: 25000
 });
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    "http://localhost:3001",
+    "https://localhost:3001",
+    "https://f1f2e7b18e93.ngrok-free.app", // Specific URL from error
+    /^https:\/\/[a-z0-9]+\.ngrok-free\.app$/,
+    /^https:\/\/[a-z0-9]+\.ngrok\.io$/,
+    /^https:\/\/[a-z0-9-]+\.ngrok\.app$/
+  ],
+  methods: ["GET", "POST", "OPTIONS"],
+  credentials: true,
+  allowedHeaders: ["ngrok-skip-browser-warning", "Content-Type", "Authorization", "Origin", "X-Requested-With", "Accept"],
+  optionsSuccessStatus: 200 // For legacy browser support
+}));
 app.use(express.json({ limit: '10mb' }));
+
+// Middleware to handle ngrok-specific headers and logging
+app.use((req, res, next) => {
+  console.log(`📥 ${req.method} ${req.url} from origin: ${req.headers.origin || 'none'}`);
+  
+  // Handle ngrok warning bypass
+  if (req.headers['ngrok-skip-browser-warning']) {
+    res.header('ngrok-skip-browser-warning', 'true');
+    console.log('🔧 Added ngrok-skip-browser-warning header');
+  }
+  
+  // Set additional headers for better compatibility
+  res.header('X-Content-Type-Options', 'nosniff');
+  res.header('X-Frame-Options', 'DENY');
+  res.header('X-XSS-Protection', '1; mode=block');
+  
+  next();
+});
+
+// Handle preflight requests explicitly
+app.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  console.log('🔍 CORS preflight request from origin:', origin);
+  console.log('🔍 Request headers:', req.headers);
+  
+  const allowedOrigins = [
+    'http://localhost:3001',
+    'https://localhost:3001',
+    'https://f1f2e7b18e93.ngrok-free.app' // Specific URL from error
+  ];
+  
+  // Check if origin matches ngrok patterns
+  const ngrokPatterns = [
+    /^https:\/\/[a-z0-9]+\.ngrok-free\.app$/,
+    /^https:\/\/[a-z0-9]+\.ngrok\.io$/,
+    /^https:\/\/[a-z0-9-]+\.ngrok\.app$/
+  ];
+  
+  const isAllowed = allowedOrigins.includes(origin) || 
+    ngrokPatterns.some(pattern => pattern.test(origin));
+  
+  console.log('🔍 Origin allowed:', isAllowed);
+  
+  if (isAllowed) {
+    res.header('Access-Control-Allow-Origin', origin);
+    console.log('✅ Set Access-Control-Allow-Origin to:', origin);
+  } else {
+    console.log('❌ Origin not allowed:', origin);
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'ngrok-skip-browser-warning,Content-Type,Authorization,Origin,X-Requested-With,Accept');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
 
 // Health check endpoint for Docker
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Test endpoint for CORS and backend functionality
+app.post('/', (req, res) => {
+  console.log('📨 Test endpoint received:', req.body);
+  res.status(200).json({ 
+    success: true, 
+    message: 'Backend is functional!', 
+    received: req.body,
+    timestamp: new Date().toISOString() 
+  });
+});
+
+// Test endpoint for CORS verification
+app.post('/test', (req, res) => {
+  console.log('📝 Test endpoint received POST request:', req.body);
+  console.log('📝 Request headers:', req.headers);
+  console.log('📝 Request origin:', req.headers.origin);
+  
+  res.json({ 
+    success: true, 
+    message: 'Backend is working and CORS is configured correctly!',
+    timestamp: new Date().toISOString(),
+    receivedData: req.body,
+    requestOrigin: req.headers.origin,
+    userAgent: req.headers['user-agent'],
+    ngrokHeader: req.headers['ngrok-skip-browser-warning']
+  });
+});
+
+// Additional CORS test endpoint
+app.get('/cors-test', (req, res) => {
+  console.log('🔍 CORS test endpoint accessed from origin:', req.headers.origin);
+  res.json({
+    message: 'CORS test successful',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString(),
+    headers: {
+      'ngrok-skip-browser-warning': req.headers['ngrok-skip-browser-warning'],
+      'user-agent': req.headers['user-agent']
+    }
+  });
 });
 
 // Model status and initialization endpoint
