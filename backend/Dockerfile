@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     libgcc-s1 \
     libstdc++6 \
     curl \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

@@ -9,15 +9,20 @@ interface WebRTCManagerProps {
   roomId: string;
   videoRef: React.RefObject<HTMLVideoElement>;
   onMetricsUpdate: (metrics: any) => void;
+  onDetectionResult?: (result: any) => void;
 }
 
-const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
-  socket,
-  mode,
-  roomId,
-  videoRef,
-  onMetricsUpdate
-}, ref) => {
+const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
+  {
+    socket,
+    mode,
+    roomId,
+    videoRef,
+    onMetricsUpdate,
+    onDetectionResult
+  },
+  ref
+) => {
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const dataChannel = useRef<RTCDataChannel | null>(null);
   const remoteStream = useRef<MediaStream | null>(null);
@@ -27,15 +32,28 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
   const metricsInterval = useRef<NodeJS.Timeout | null>(null);
   const frameCounter = useRef(0);
   const latencyHistory = useRef<number[]>([]);
+  const bandwidthHistory = useRef<{timestamp: number, bytesSent: number, bytesReceived: number}[]>([]);
 
   useImperativeHandle(ref, () => ({
     startDetection: () => {
+      console.log(`🎯 WebRTCManager: Starting detection in ${mode} mode`);
       isDetecting.current = true;
       startMetricsCollection();
     },
     stopDetection: () => {
+      console.log('🛑 WebRTCManager: Stopping detection');
       isDetecting.current = false;
       stopMetricsCollection();
+      // Clear frame queue when stopping detection
+      frameQueue.current = [];
+      processingFrame.current = false;
+    },
+    cleanup: () => {
+      console.log('🧹 WebRTCManager: Performing cleanup');
+      isDetecting.current = false;
+      stopMetricsCollection();
+      frameQueue.current = [];
+      processingFrame.current = false;
     }
   }));
 
@@ -55,6 +73,20 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
       setupSocketListeners();
     }
   }, [socket, roomId]);
+
+  // Initialize YOLO model when mode is WASM
+  useEffect(() => {
+    if (mode === 'wasm') {
+      console.log('🔄 Initializing YOLO WASM model...');
+      initYoloModel()
+        .then(() => {
+          console.log('✅ YOLO WASM model initialized successfully');
+        })
+        .catch((error) => {
+          console.error('❌ Failed to initialize YOLO WASM model:', error);
+        });
+    }
+  }, [mode]);
 
   const setupWebRTC = () => {
     const configuration = {
@@ -80,10 +112,8 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
 
     // Handle data channel from phone
     peerConnection.current.ondatachannel = (event) => {
-      console.log('📡 Browser - Received data channel from phone:', event.channel.label);
       const channel = event.channel;
       if (channel.label === 'frames') {
-        console.log('📡 Browser - Setting up frames data channel from phone');
         setupDataChannel(channel);
       }
     };
@@ -92,90 +122,110 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
     dataChannel.current = peerConnection.current.createDataChannel('detections', {
       ordered: true
     });
-    console.log('📡 Browser - Created detections data channel for sending results to phone');
     setupDataChannel(dataChannel.current);
 
     peerConnection.current.onconnectionstatechange = () => {
       const state = peerConnection.current?.connectionState;
-      console.log('🔄 Browser - WebRTC connection state changed:', state);
-      console.log('📊 Browser - ICE connection state:', peerConnection.current?.iceConnectionState);
-      console.log('📊 Browser - ICE gathering state:', peerConnection.current?.iceGatheringState);
       
       if (state === 'connected') {
-        console.log('✅ Browser - WebRTC peer connection established successfully');
-      } else if (state === 'disconnected') {
-        console.log('⚠️ Browser - WebRTC connection disconnected');
+        console.log('✅ WebRTC connection established');
       } else if (state === 'failed') {
-        console.log('❌ Browser - WebRTC connection failed');
-      } else if (state === 'connecting') {
-        console.log('🔄 Browser - WebRTC connection in progress...');
+        console.log('❌ WebRTC connection failed');
       }
     };
 
-    peerConnection.current.onicegatheringstatechange = () => {
-      console.log('🧊 Browser - ICE gathering state changed:', peerConnection.current?.iceGatheringState);
-    };
-    
-    peerConnection.current.oniceconnectionstatechange = () => {
-      console.log('🧊 Browser - ICE connection state changed:', peerConnection.current?.iceConnectionState);
-    };
-    
-    peerConnection.current.onsignalingstatechange = () => {
-      console.log('📡 Browser - Signaling state changed:', peerConnection.current?.signalingState);
-    };
+    // ICE state change handlers (minimal logging)
+    peerConnection.current.onicegatheringstatechange = () => {};
+    peerConnection.current.oniceconnectionstatechange = () => {};
+    peerConnection.current.onsignalingstatechange = () => {};
 
     // Handle ICE candidates
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate && socket) {
-        console.log('🧊 Browser - Generated ICE candidate:', event.candidate.candidate);
-        console.log('📊 Browser - ICE candidate type:', event.candidate.type);
-        console.log('📊 Browser - ICE candidate protocol:', event.candidate.protocol);
         socket.emit('ice-candidate', {
           room: roomId,
           candidate: event.candidate
         });
-        console.log('📤 Browser - ICE candidate sent to phone');
-      } else if (event.candidate === null) {
-        console.log('🧊 Browser - ICE gathering completed');
       }
     };
   };
 
   const setupDataChannel = (channel: RTCDataChannel) => {
-    console.log('📡 Browser - Setting up data channel:', channel.label, 'readyState:', channel.readyState);
     
     channel.onopen = () => {
-      console.log('✅ Browser - Data channel opened:', channel.label, 'readyState:', channel.readyState);
+      console.log('✅ Data channel ready:', channel.label);
     };
 
     channel.onclose = () => {
-      console.log('❌ Browser - Data channel closed:', channel.label);
+      console.log('❌ Data channel closed:', channel.label);
     };
 
     channel.onerror = (error) => {
-      console.error('❌ Browser - Data channel error:', channel.label, error);
+      console.error('❌ Data channel error:', channel.label, error);
     };
 
     channel.onmessage = async (event) => {
-      if (!isDetecting.current) return;
-
       try {
         const frameData = JSON.parse(event.data);
         
-        // Add to frame queue with limit
-        frameQueue.current.push(frameData);
-        if (frameQueue.current.length > 5) {
-          frameQueue.current.shift(); // Drop old frames
+        // Display the frame in video element if it's a frames channel
+        if (channel.label === 'frames' && frameData.imageData && videoRef.current) {
+          displayFrame(frameData.imageData);
         }
+        
+        // Process frames for detection if detection is active
+        if (isDetecting.current) {
+          // Add to frame queue with limit
+          frameQueue.current.push(frameData);
+          if (frameQueue.current.length > 5) {
+            frameQueue.current.shift(); // Drop old frames
+          }
 
-        // Process frames
-        if (!processingFrame.current) {
-          processFrameQueue();
+          // Process frames
+          if (!processingFrame.current) {
+            processFrameQueue();
+          }
         }
       } catch (error) {
         console.error('Error processing frame:', error);
       }
     };
+  };
+
+  const displayFrame = (base64ImageData: string) => {
+    if (!videoRef.current) return;
+    
+    try {
+      // Create or get the display canvas
+      let displayCanvas = videoRef.current.parentElement?.querySelector('.display-canvas') as HTMLCanvasElement;
+      if (!displayCanvas) {
+        displayCanvas = document.createElement('canvas');
+        displayCanvas.className = 'display-canvas';
+        // Place this below DetectionOverlay (z-index 10) but above video (default stacking)
+        displayCanvas.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;';
+        videoRef.current.parentElement?.appendChild(displayCanvas);
+        
+        // Do NOT hide the video; keep it visible in case track rendering is used
+        videoRef.current.style.opacity = '';
+      }
+      
+      const img = new Image();
+      img.onload = () => {
+        const ctx = displayCanvas.getContext('2d')!;
+        
+        // Set canvas size to match container
+        const rect = displayCanvas.getBoundingClientRect();
+        displayCanvas.width = rect.width;
+        displayCanvas.height = rect.height;
+        
+        // Draw the frame to fill the canvas
+        ctx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+        ctx.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
+      };
+      img.src = base64ImageData;
+    } catch (error) {
+      console.error('Error displaying frame:', error);
+    }
   };
 
   const processFrameQueue = async () => {
@@ -193,7 +243,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
       }
       
       frameCounter.current++;
-      updateLatencyMetrics(result);
+      await updateLatencyMetrics(result);
       
     } catch (error) {
       console.error('Frame processing error:', error);
@@ -214,9 +264,11 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
     let detections: Detection[] = [];
     let inference_ts = recv_ts;
 
+    console.log(`🔄 Processing frame in ${mode.toUpperCase()} mode`);
+
     if (mode === 'wasm') {
       // Client-side inference using WASM - resize to 320x320
-      console.log(`🧠 Frontend WebRTC Manager - Starting WASM inference for frame ${frame_id}`);
+      // Starting WASM inference
       const inference_start = Date.now();
       
       try {
@@ -226,49 +278,32 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
         const img = new Image();
         
         await new Promise((resolve, reject) => {
-          img.onload = () => {
-            console.log(`🖼️ Frontend WebRTC Manager - Image loaded for frame ${frame_id}: ${img.width}x${img.height}`);
-            resolve(null);
-          };
-          img.onerror = (error) => {
-            console.error(`❌ Frontend WebRTC Manager - Failed to load image for frame ${frame_id}:`, error);
-            reject(error);
-          };
+          img.onload = () => resolve(null);
+          img.onerror = reject;
           img.src = imageData; // base64 data URL
         });
         
-        // Resize to 320x320 for WASM YOLO model
-        const startResize = Date.now();
-        canvas.width = 320;
-        canvas.height = 320;
-        ctx.drawImage(img, 0, 0, 320, 320);
-        const resizeTime = Date.now() - startResize;
-        
-        console.log(`🔧 Frontend WebRTC Manager - Image resized to 320x320 in ${resizeTime}ms`);
+        // Resize to 640x640 for WASM YOLO model (yolov10n.onnx)
+         canvas.width = 640;
+         canvas.height = 640;
+         ctx.drawImage(img, 0, 0, 640, 640);
         
         // Run YOLO inference
-        const startInference = Date.now();
         detections = await runYoloInference(canvas);
-        const inferenceTime = Date.now() - startInference;
         
-        console.log(`⚡ Frontend WebRTC Manager - WASM inference completed in ${inferenceTime}ms`);
-        console.log(`🎯 Frontend WebRTC Manager - Found ${detections.length} detections`);
-        
-        // Log first few detections
-        detections.slice(0, 3).forEach((det, idx) => {
-          const scorePercent = det.score && isFinite(det.score) ? (det.score * 100).toFixed(1) : 'N/A';
-          console.log(`🏷️ Frontend WebRTC Manager - Detection ${idx + 1}: ${det.label} (${scorePercent}%)`);
-        });
+        if (detections.length > 0) {
+          console.log(`🎯 WASM detected: ${detections.map(d => `${d.label} (${(d.score * 100).toFixed(1)}%)`).join(', ')}`);
+        }
         
       } catch (error) {
-        console.error(`❌ Frontend WebRTC Manager - WASM inference error for frame ${frame_id}:`, error);
-        console.error('❌ Frontend WebRTC Manager - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+        console.error('❌ WASM inference error:', error);
       }
       
       inference_ts = Date.now();
       
     } else {
       // Server-side inference - resize to 640x640
+      console.log(`🖥️ SERVER mode: Processing frame via backend server`);
       if (socket) {
         try {
           // Create canvas and load base64 image
@@ -282,7 +317,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
             img.src = imageData; // base64 data URL
           });
           
-          // Resize to 640x640 for server YOLO model
+          // Resize to 640x640 to match server-side YOLO model input dimensions
           canvas.width = 640;
           canvas.height = 640;
           ctx.drawImage(img, 0, 0, 640, 640);
@@ -313,40 +348,52 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
           detections = processed.detections;
           inference_ts = processed.inference_ts;
         } catch (error) {
-          console.error('Server inference error:', error);
+          console.error('❌ Server inference error:', error);
           inference_ts = Date.now();
         }
+      } else {
+        console.warn('⚠️ SERVER mode: No socket connection available for server inference');
       }
     }
 
-    return {
+    const result = {
       frame_id,
       capture_ts,
       recv_ts,
       inference_ts,
       detections
     };
+    
+    // Send detection results to parent component
+    if (onDetectionResult) {
+      onDetectionResult(result);
+    }
+    
+    // Send detection results to phone via data channel
+    if (dataChannel.current && dataChannel.current.readyState === 'open') {
+      try {
+        dataChannel.current.send(JSON.stringify(result));
+        console.log(`📤 BROWSER Sent detection results to phone: ${result.detections.length} detections`);
+      } catch (error) {
+        console.error('❌ BROWSER Error sending detection results to phone:', error);
+      }
+    }
+    
+    return result;
   };
 
   const runYoloInference = async (canvas: HTMLCanvasElement): Promise<Detection[]> => {
     try {
-      console.log(`📊 Frontend WebRTC Manager - Extracting image data from canvas: ${canvas.width}x${canvas.height}`);
       const imageData = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
-      console.log(`📊 Frontend WebRTC Manager - ImageData length: ${imageData.data.length}`);
-      
-      console.log(`🚀 Frontend WebRTC Manager - Running YOLO model...`);
       const detections = await runYoloModel(imageData);
-      console.log(`✅ Frontend WebRTC Manager - YOLO model returned ${detections.length} detections`);
-      
       return detections;
     } catch (error) {
-      console.error('❌ Frontend WebRTC Manager - YOLO inference error:', error);
-      console.error('❌ Frontend WebRTC Manager - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      console.error('❌ YOLO inference error:', error);
       return [];
     }
   };
 
-  const updateLatencyMetrics = (result: any) => {
+  const updateLatencyMetrics = async (result: any) => {
     const e2eLatency = Date.now() - result.capture_ts;
     latencyHistory.current.push(e2eLatency);
     
@@ -359,6 +406,67 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
     const median = sorted[Math.floor(sorted.length / 2)] || 0;
     const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
     
+    // Calculate bandwidth from WebRTC stats
+    let uplink = 0;
+    let downlink = 0;
+    
+    if (peerConnection.current) {
+      try {
+        const stats = await peerConnection.current.getStats();
+        let bytesSent = 0;
+        let bytesReceived = 0;
+        
+        // Find the active candidate pair with actual data transfer
+        let activePair: any = null;
+        let maxBytes = 0;
+        stats.forEach((report: any) => {
+          if (report.type === 'candidate-pair' && (report.bytesSent || 0) > maxBytes) {
+            maxBytes = report.bytesSent || 0;
+            activePair = report;
+          }
+        });
+        
+        if (activePair) {
+          bytesSent = activePair.bytesSent || 0;
+          bytesReceived = activePair.bytesReceived || 0;
+          
+          // Include data channel stats separately if needed
+          stats.forEach((report: any) => {
+            if (report.type === 'data-channel') {
+              bytesSent += report.bytesSent || 0;
+              bytesReceived += report.bytesReceived || 0;
+            }
+          });
+        }
+        
+        // Store current bandwidth measurement
+        const now = Date.now();
+        bandwidthHistory.current.push({ timestamp: now, bytesSent, bytesReceived });
+        
+        // Keep only last 10 measurements (for ~5 second window)
+        if (bandwidthHistory.current.length > 10) {
+          bandwidthHistory.current.shift();
+        }
+        
+        // Calculate bandwidth rate if we have at least 2 measurements
+        if (bandwidthHistory.current.length >= 2) {
+          const latest = bandwidthHistory.current[bandwidthHistory.current.length - 1];
+          const previous = bandwidthHistory.current[0];
+          
+          const timeDiffSeconds = (latest.timestamp - previous.timestamp) / 1000;
+          const bytesSentDiff = latest.bytesSent - previous.bytesSent;
+          const bytesReceivedDiff = latest.bytesReceived - previous.bytesReceived;
+          
+          if (timeDiffSeconds > 0) {
+            uplink = (bytesSentDiff * 8) / (timeDiffSeconds * 1000); // kbps
+            downlink = (bytesReceivedDiff * 8) / (timeDiffSeconds * 1000); // kbps
+          }
+        }
+      } catch (error) {
+        console.error('Error getting WebRTC stats:', error);
+      }
+    }
+    
     onMetricsUpdate({
       e2eLatency: {
         current: e2eLatency,
@@ -366,6 +474,8 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
         p95
       },
       processingFps: frameCounter.current / 30, // Assuming 30s window
+      uplink,
+      downlink,
       serverLatency: result.inference_ts - result.recv_ts,
       networkLatency: result.recv_ts - result.capture_ts,
       framesProcessed: frameCounter.current
@@ -375,6 +485,7 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
   const startMetricsCollection = () => {
     frameCounter.current = 0;
     latencyHistory.current = [];
+    bandwidthHistory.current = [];
     
     metricsInterval.current = setInterval(() => {
       // Reset frame counter every 30 seconds for FPS calculation
@@ -393,10 +504,8 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
     if (!socket) return;
 
     socket.on('peer-joined', (data) => {
-      console.log('👥 Browser - Peer joined event received:', data);
       if (data.type === 'phone') {
-        console.log('📱 Browser - Phone connected to room');
-        console.log('🤝 Browser - Creating WebRTC offer for phone...');
+        console.log('📱 Phone connected');
         // Browser should create offer when phone joins
         setTimeout(() => {
           createOffer();
@@ -404,68 +513,92 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>(({
       }
     });
 
+    // Handle detection results from server
+    socket.on('detection-result', (result) => {
+      if (onDetectionResult) {
+        onDetectionResult(result);
+      }
+    });
+
     socket.on('answer', async (data) => {
-      console.log('📥 Browser received answer from phone:', data);
       if (peerConnection.current) {
         try {
           await peerConnection.current.setRemoteDescription(data.answer);
-          console.log('✅ Set remote description (answer)');
         } catch (error) {
           console.error('❌ Error handling answer:', error);
         }
-      } else {
-        console.error('❌ No peer connection available to handle answer');
       }
     });
 
     socket.on('ice-candidate', async (data) => {
-      console.log('📥 Browser received ICE candidate:', data.candidate);
       if (peerConnection.current && data.candidate) {
         try {
           await peerConnection.current.addIceCandidate(data.candidate);
-          console.log('✅ Added ICE candidate');
         } catch (error) {
           console.error('❌ Error adding ICE candidate:', error);
         }
       }
     });
+
+    socket.on('peer-left', (data) => {
+      if (data.type === 'phone') {
+        console.log('📱 Phone disconnected');
+        // Clear video element
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+          // Remove any display canvas and restore visibility
+          const displayCanvas = videoRef.current.parentElement?.querySelector('.display-canvas') as HTMLCanvasElement | null;
+          if (displayCanvas) {
+            displayCanvas.remove();
+          }
+          videoRef.current.style.opacity = '';
+        }
+        // Clear remote stream reference
+        remoteStream.current = null;
+        // Stop detection
+        isDetecting.current = false;
+        stopMetricsCollection();
+      }
+    });
   };
 
   const createOffer = async () => {
-    console.log('🤝 Browser - createOffer function called');
     if (!peerConnection.current) {
-      console.log('❌ Browser - Cannot create offer: no peer connection available');
       return;
     }
 
     try {
-      console.log('🔄 Browser - Creating WebRTC offer...');
       const offer = await peerConnection.current.createOffer();
-      console.log('📊 Browser - Offer SDP type:', offer.type);
-      console.log('📊 Browser - Offer SDP length:', offer.sdp?.length || 0);
-      
-      console.log('🔄 Browser - Setting local description (offer)...');
       await peerConnection.current.setLocalDescription(offer);
-      console.log('✅ Browser - Created and set local description (offer) successfully');
       
-      console.log('📤 Browser - Sending offer to phone via socket...');
       if (socket) {
         socket.emit('offer', {
           room: roomId,
           offer
         });
-        console.log('✅ Browser - Offer sent to phone successfully');
-      } else {
-        console.error('❌ Browser - No socket available to send offer');
       }
     } catch (error) {
-      console.error('❌ Browser - Error creating offer:', error);
+      console.error('❌ Error creating offer:', error);
     }
   };
 
   const cleanup = () => {
     isDetecting.current = false;
     stopMetricsCollection();
+    
+    // Clear video element
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+      // Remove any display canvas and restore visibility
+      const displayCanvas = videoRef.current.parentElement?.querySelector('.display-canvas') as HTMLCanvasElement | null;
+      if (displayCanvas) {
+        displayCanvas.remove();
+      }
+      videoRef.current.style.opacity = '';
+    }
+    
+    // Clear remote stream reference
+    remoteStream.current = null;
     
     if (dataChannel.current) {
       dataChannel.current.close();

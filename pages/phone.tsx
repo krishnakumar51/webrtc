@@ -164,11 +164,21 @@ export default function Phone({ signalingUrl }: PhoneProps) {
       console.log('📊 Phone - Data channel max message size:', dataChannelRef.current?.maxPacketLifeTime);
       setIsConnected(true);
       setError(''); // Clear any previous errors
+      // Auto-start streaming once the data channel is open
+      if (!isStreaming) {
+        setTimeout(() => {
+          if (dataChannelRef.current?.readyState === 'open') {
+            startStreaming();
+          }
+        }, 100);
+      }
     };
 
     dataChannelRef.current.onclose = () => {
       console.log('📡 Phone - Data channel closed');
       console.log('📊 Phone - Data channel ready state:', dataChannelRef.current?.readyState);
+      // Ensure streaming loop is stopped when channel closes
+      stopStreaming();
       setIsConnected(false);
     };
 
@@ -176,6 +186,8 @@ export default function Phone({ signalingUrl }: PhoneProps) {
       console.error('❌ Phone - Data channel error:', error);
       console.error('📊 Phone - Data channel ready state:', dataChannelRef.current?.readyState);
       console.error('📊 Phone - Error type:', error.type);
+      // Stop streaming on error to prevent tight failing loop
+      stopStreaming();
       setError('Data channel connection failed');
     };
     
@@ -576,105 +588,325 @@ export default function Phone({ signalingUrl }: PhoneProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
-      <div className="min-h-screen bg-gray-900 text-white">
-        <div className="container mx-auto px-4 py-6">
-          {/* Header */}
-          <header className="text-center mb-6">
-            <h1 className="text-2xl font-bold mb-2">📱 Phone Camera</h1>
-            <p className="text-gray-300 text-sm">Room: {room}</p>
-            <div className="flex items-center justify-center mt-2 space-x-4">
-              <div className="flex items-center space-x-1">
-                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></div>
-                <span className="text-xs">{isConnected ? 'Connected' : 'Connecting...'}</span>
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-blue-950 to-slate-950 text-white font-sans">
+        <div className="container mx-auto px-6 py-8 max-w-7xl">
+          <header className="mb-8">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
+              <div className="mb-6 lg:mb-0">
+                <h1 className="text-4xl lg:text-5xl font-bold text-white mb-2">
+                  WebRTC VLM Detection - Mobile
+                </h1>
+                <p className="text-slate-300 text-lg">Real-time multi-object detection via phone streaming</p>
               </div>
-              <div className="flex items-center space-x-1">
-                <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-blue-400' : 'bg-gray-400'}`}></div>
-                <span className="text-xs">{isStreaming ? 'Streaming' : 'Idle'}</span>
+              
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div className="flex items-center space-x-4">
+                  <div className="flex items-center space-x-2 px-4 py-2 bg-slate-900/60 rounded-full backdrop-blur-sm border border-blue-800/30">
+                    <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></div>
+                    <span className="text-white text-sm font-medium">{isConnected ? 'Connected' : 'Disconnected'}</span>
+                  </div>
+                  <div className="flex items-center space-x-2 px-4 py-2 bg-blue-600/20 rounded-full backdrop-blur-sm border border-blue-500/30">
+                    <div className={`w-3 h-3 rounded-full ${isStreaming ? 'bg-blue-400' : 'bg-purple-400'}`}></div>
+                    <span className="text-white text-sm font-medium">{isStreaming ? 'STREAMING' : 'IDLE'}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </header>
 
-          {/* Camera View */}
-          <div className="relative mb-6">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full rounded-lg bg-black"
-              style={{ transform: 'scaleX(-1)' }} // Mirror for selfie effect
-            />
+          {/* Main Content Section: Video Player (Left) + Phone Connection (Right) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            {/* Video Player - Left Side (2/3 width) */}
+            <div className="lg:col-span-2">
+              <div className="bg-slate-900/40 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl h-full">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                      <span className="text-white text-lg">📹</span>
+                    </div>
+                    <h2 className="text-xl font-bold text-white">Live Stream</h2>
+                  </div>
+                  <div className="flex items-center space-x-4">
+                    <div className={`px-4 py-2 rounded-lg text-sm font-medium border ${
+                      isStreaming 
+                        ? 'bg-green-600/20 text-green-400 border-green-500/50' 
+                        : 'bg-slate-700/50 text-slate-400 border-slate-600/50'
+                    }`}>
+                      {isStreaming ? 'Detecting' : 'Idle'}
+                    </div>
+                    <div className="bg-slate-700/50 px-4 py-2 rounded-lg border border-slate-600/50">
+                      <span className="text-white text-sm font-medium">{detections.length} objects</span>
+                    </div>
+                  </div>
+                </div>
+
+                
+                <div className="relative bg-slate-950/70 rounded-xl overflow-hidden shadow-inner border border-slate-700/50" style={{ aspectRatio: '16/9' }}>
+                  <video
+                    ref={videoRef}
+                    className="w-full h-full object-cover"
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{ transform: 'scaleX(-1)' }} // Mirror for selfie effect
+                  />
+                  
+                  {!isConnected && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
+                      <div className="text-center text-white p-8 rounded-xl bg-slate-800/50 backdrop-blur-md border border-slate-700/50">
+                        <div className="w-16 h-16 mx-auto mb-4 bg-blue-600 rounded-full flex items-center justify-center">
+                          <span className="text-2xl">📱</span>
+                        </div>
+                        <p className="text-xl font-semibold mb-2">Mobile Camera Active</p>
+                        <p className="text-sm text-slate-300">Point your camera at objects to detect</p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Detection Overlays */}
+                  {detections.map((detection, index) => (
+                    <div
+                      key={index}
+                      className="absolute border-2 border-green-400 rounded-lg"
+                      style={{
+                        left: `${detection.xmin * 100}%`,
+                        top: `${detection.ymin * 100}%`,
+                        width: `${(detection.xmax - detection.xmin) * 100}%`,
+                        height: `${(detection.ymax - detection.ymin) * 100}%`,
+                      }}
+                    >
+                      <div className="bg-green-400/90 backdrop-blur-sm text-black text-xs px-2 py-1 rounded-md -mt-6 font-semibold">
+                        {detection.label} {(detection.score * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {/* Detection count overlay */}
+                  {isConnected && detections.length > 0 && (
+                    <div className="absolute top-4 right-4 bg-slate-800/80 backdrop-blur-sm rounded-lg px-3 py-2 border border-slate-600/50">
+                      <span className="text-white text-sm font-medium">
+                        {detections.length} object{detections.length !== 1 ? 's' : ''} detected
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Hidden canvas for frame capture */}
+                  <canvas ref={canvasRef} style={{ display: 'none' }} />
+                </div>
+
+                
+                <button
+                  onClick={isStreaming ? stopStreaming : startStreaming}
+                  disabled={!isConnected}
+                  className={`w-full mt-6 px-6 py-4 rounded-xl font-semibold text-lg transition-all duration-200 ${
+                    isStreaming
+                      ? 'bg-red-600 hover:bg-red-700 text-white border border-red-500/50'
+                      : isConnected 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white border border-blue-500/50'
+                        : 'bg-slate-700 text-slate-400 cursor-not-allowed border border-slate-600/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-center space-x-2">
+                    <span className="text-xl">{isStreaming ? '⏹️' : '▶️'}</span>
+                    <span>{isStreaming ? 'Stop Streaming' : 'Start Streaming'}</span>
+                  </div>
+                </button>
+              </div>
+            </div>
             
-            {/* Detection Overlays */}
-            {detections.map((detection, index) => (
-              <div
-                key={index}
-                className="absolute border-2 border-green-400"
-                style={{
-                  left: `${detection.xmin * 100}%`,
-                  top: `${detection.ymin * 100}%`,
-                  width: `${(detection.xmax - detection.xmin) * 100}%`,
-                  height: `${(detection.ymax - detection.ymin) * 100}%`,
-                }}
-              >
-                <div className="bg-green-400 text-black text-xs px-1 -mt-5">
-                  {detection.label} {(detection.score * 100).toFixed(1)}%
+            {/* Phone Connection - Right Side (1/3 width) */}
+            <div className="lg:col-span-1">
+              <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl h-full">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center">
+                      <span className="text-white text-lg">📱</span>
+                    </div>
+                    <h3 className="text-lg font-bold text-white">Mobile Status</h3>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'}`} />
+                    <span className="text-white text-sm font-medium">
+                      {isConnected ? 'Connected' : 'Connecting'}
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="space-y-6">
+                  {/* Room Info */}
+                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Room ID:
+                    </label>
+                    <div className="text-white font-mono text-lg">{room}</div>
+                  </div>
+                  
+                  {/* Connection Details */}
+                  <div className="space-y-4 flex-1 flex flex-col justify-center">
+                    <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                      <p className="text-slate-300 text-sm mb-3 font-medium">Mobile Camera Instructions:</p>
+                      <ul className="text-slate-400 text-sm space-y-2">
+                        <li>1. Keep camera permissions enabled</li>
+                        <li>2. Point camera at objects to detect</li>
+                        <li>3. Maintain stable network connection</li>
+                        <li>4. Keep phone steady for better results</li>
+                      </ul>
+                    </div>
+                    
+                    {error && (
+                      <div className="bg-red-500/10 backdrop-blur-xl border border-red-500/30 rounded-lg p-4 text-red-200 text-sm">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-red-400 text-lg">⚠️</span>
+                          <span>{error}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            ))}
-
-            {/* Hidden canvas for frame capture */}
-            <canvas ref={canvasRef} style={{ display: 'none' }} />
+            </div>
           </div>
 
-          {/* Controls */}
-          <div className="space-y-4">
-            {error && (
-              <div className="bg-red-500/20 border border-red-500 rounded-lg p-3 text-red-200 text-sm">
-                {error}
-              </div>
-            )}
-
-            <div className="flex space-x-3">
-              {!isStreaming ? (
-                <button
-                  onClick={startStreaming}
-                  disabled={!isConnected}
-                  className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-500 disabled:cursor-not-allowed text-white py-3 rounded-lg font-semibold"
-                >
-                  Start Streaming
-                </button>
-              ) : (
-                <button
-                  onClick={stopStreaming}
-                  className="flex-1 bg-red-500 hover:bg-red-600 text-white py-3 rounded-lg font-semibold"
-                >
-                  Stop Streaming
-                </button>
-              )}
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div className="bg-gray-800 rounded-lg p-3">
-                <div className="text-gray-400">Frames Sent</div>
-                <div className="text-xl font-bold">{framesSent}</div>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-3">
-                <div className="text-gray-400">Detections</div>
-                <div className="text-xl font-bold">{detections.length}</div>
+          {/* Performance Metrics Panel - Below Video Player */}
+          <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl mb-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                  <span className="text-white text-lg">⚡</span>
+                </div>
+                <h3 className="text-xl font-bold text-white">Performance Metrics</h3>
               </div>
             </div>
+            
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
+                <div className="text-2xl font-bold text-white mb-1">{framesSent}</div>
+                <div className="text-xs text-slate-300">Frames Sent</div>
+                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
+                  <div className="bg-gradient-to-r from-blue-400 to-cyan-400 h-1 rounded-full transition-all duration-300" style={{ width: `${Math.min(framesSent / 10, 100)}%` }} />
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
+                <div className="text-2xl font-bold text-white mb-1">{detections.length}</div>
+                <div className="text-xs text-slate-300">Objects Found</div>
+                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
+                  <div className={`h-1 rounded-full transition-all duration-300 ${
+                    detections.length > 0 ? 'bg-gradient-to-r from-green-400 to-emerald-400' : 'bg-gray-600'
+                  }`} style={{ width: `${Math.min(detections.length * 20, 100)}%` }} />
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
+                <div className="text-2xl font-bold text-white mb-1">0</div>
+                <div className="text-xs text-slate-300">Processing FPS</div>
+                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
+                  <div className="bg-gradient-to-r from-purple-400 to-pink-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
+                <div className="text-2xl font-bold text-white mb-1">0</div>
+                <div className="text-xs text-slate-300">Uplink (kbps)</div>
+                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
+                  <div className="bg-gradient-to-r from-green-400 to-blue-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
+                <div className="text-2xl font-bold text-white mb-1">0</div>
+                <div className="text-xs text-slate-300">Server (ms)</div>
+                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
+                  <div className="bg-gradient-to-r from-orange-400 to-red-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
+                </div>
+              </div>
+              
+              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
+                <div className="text-2xl font-bold text-white mb-1">0</div>
+                <div className="text-xs text-slate-300">Network (ms)</div>
+                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
+                  <div className="bg-gradient-to-r from-teal-400 to-cyan-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Bottom Section: Detection Info (Left) + Quick Stats (Right) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Detection Info Panel - Left Side */}
+            <div>
+              <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl h-full flex flex-col">
+                <div className="flex items-center space-x-3 mb-6">
+                  <div className="w-10 h-10 bg-orange-600 rounded-lg flex items-center justify-center">
+                    <span className="text-white text-lg">🎯</span>
+                  </div>
+                  <h3 className="text-xl font-bold text-white">Detection Information</h3>
+                </div>
+                
+                <div className="grid grid-cols-3 gap-4 items-start pt-4">
+                  <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-600/50 text-center aspect-square flex flex-col justify-center">
+                    <div className="text-3xl font-bold text-white mb-2">{detections.length}</div>
+                    <div className="text-sm text-slate-300 mb-2">Objects Detected</div>
+                    <div className={`w-3 h-3 rounded-full mx-auto ${
+                      detections.length > 0 ? 'bg-green-400' : 'bg-slate-500'
+                    }`} />
+                  </div>
+                  
+                  <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-600/50 text-center aspect-square flex flex-col justify-center">
+                    <div className={`text-3xl font-bold mb-2 ${
+                      isStreaming ? 'text-green-400' : 'text-yellow-400'
+                    }`}>
+                      {isStreaming ? '●' : '○'}
+                    </div>
+                    <div className="text-sm text-slate-300 mb-2">Processing</div>
+                    <div className={`w-3 h-3 rounded-full mx-auto ${
+                      isStreaming ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'
+                    }`} />
+                  </div>
+                  
+                  <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-600/50 text-center aspect-square flex flex-col justify-center">
+                    <div className="text-lg font-bold text-white mb-2">MOBILE</div>
+                    <div className="text-sm text-slate-300 mb-2">Mode</div>
+                    <div className="w-3 h-3 rounded-full mx-auto bg-purple-400" />
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Quick Stats - Right Side */}
+            <div>
+              <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl h-full">
+                <div className="flex items-center space-x-3 mb-6">
+                  <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+                    <span className="text-white text-lg">📊</span>
+                  </div>
+                  <h3 className="text-xl font-bold text-white">Quick Stats</h3>
+                </div>
 
-            {/* Instructions */}
-            <div className="bg-blue-500/20 border border-blue-500 rounded-lg p-4">
-              <h3 className="font-semibold mb-2">📋 Instructions</h3>
-              <ul className="text-sm text-blue-200 space-y-1">
-                <li>• Point your camera at objects to detect</li>
-                <li>• Keep the phone steady for better detection</li>
-                <li>• Make sure you have good lighting</li>
-                <li>• Stay connected to the same Wi-Fi network</li>
-              </ul>
+                
+                <div className="space-y-4">
+                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-300 text-sm">Frames Sent</span>
+                      <span className="text-lg font-bold text-white">{framesSent}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-300 text-sm">Objects Found</span>
+                      <span className="text-lg font-bold text-white">{detections.length}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-300 text-sm">Status</span>
+                      <span className="text-lg font-bold text-white">{isStreaming ? 'Active' : 'Idle'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

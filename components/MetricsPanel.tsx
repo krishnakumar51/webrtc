@@ -19,6 +19,10 @@ interface MetricsPanelProps {
   onExportMetrics: () => void;
 }
 
+const safeFixed = (value: number | undefined | null, digits = 1) => {
+  return typeof value === 'number' && isFinite(value) ? value.toFixed(digits) : '0.0';
+};
+
 const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics }) => {
   const getStatusColor = (value: number, thresholds: { good: number; warning: number }) => {
     if (value <= thresholds.good) return 'text-green-400';
@@ -27,8 +31,17 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
   };
 
   const getProgressValue = (current: number, max: number) => {
-    return Math.min((current / max) * 100, 100);
+    const val = typeof current === 'number' && isFinite(current) ? current : 0;
+    return Math.min((val / max) * 100, 100);
   };
+
+  const e2eCurrent = metrics?.e2eLatency?.current ?? 0;
+  const e2eP95 = metrics?.e2eLatency?.p95 ?? 0;
+  const processingFps = metrics?.processingFps ?? 0;
+  const uplink = metrics?.uplink ?? 0;
+  const downlink = metrics?.downlink ?? 0;
+  const serverLatency = metrics?.serverLatency ?? 0;
+  const networkLatency = metrics?.networkLatency ?? 0;
 
   return (
     <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20 h-full flex flex-col">
@@ -54,20 +67,20 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
           <span className="text-white font-medium">E2E Latency</span>
         </div>
         <div className="flex justify-between items-center mb-1">
-          <span className={`font-bold text-lg ${getStatusColor(metrics.e2eLatency.current, { good: 50, warning: 100 })}`}>
-            {metrics.e2eLatency.current.toFixed(1)}ms
+          <span className={`font-bold text-lg ${getStatusColor(e2eCurrent, { good: 50, warning: 100 })}`}>
+            {safeFixed(e2eCurrent, 1)}ms
           </span>
           <span className="text-blue-200 text-sm">
-            P95: {metrics.e2eLatency.p95.toFixed(1)}ms
+            P95: {safeFixed(e2eP95, 1)}ms
           </span>
         </div>
         <div className="w-full bg-black/30 rounded-full h-2">
           <div
             className={`h-2 rounded-full transition-all duration-300 ${
-              metrics.e2eLatency.current <= 50 ? 'bg-green-400' :
-              metrics.e2eLatency.current <= 100 ? 'bg-yellow-400' : 'bg-red-400'
+              e2eCurrent <= 50 ? 'bg-green-400' :
+              e2eCurrent <= 100 ? 'bg-yellow-400' : 'bg-red-400'
             }`}
-            style={{ width: `${getProgressValue(metrics.e2eLatency.current, 200)}%` }}
+            style={{ width: `${getProgressValue(e2eCurrent, 200)}%` }}
           />
         </div>
       </div>
@@ -79,18 +92,18 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
           <span className="text-white font-medium">Processing FPS</span>
         </div>
         <div className="flex justify-between items-center mb-1">
-          <span className={`font-bold text-lg ${getStatusColor(15 - metrics.processingFps, { good: 5, warning: 10 })}`}>
-            {metrics.processingFps.toFixed(1)}
+          <span className={`font-bold text-lg ${getStatusColor(15 - processingFps, { good: 5, warning: 10 })}`}>
+            {safeFixed(processingFps, 1)}
           </span>
           <span className="text-blue-200 text-sm">Target: 15 FPS</span>
         </div>
         <div className="w-full bg-black/30 rounded-full h-2">
           <div
             className={`h-2 rounded-full transition-all duration-300 ${
-              metrics.processingFps >= 12 ? 'bg-green-400' :
-              metrics.processingFps >= 8 ? 'bg-yellow-400' : 'bg-red-400'
+              processingFps >= 12 ? 'bg-green-400' :
+              processingFps >= 8 ? 'bg-yellow-400' : 'bg-red-400'
             }`}
-            style={{ width: `${getProgressValue(metrics.processingFps, 15)}%` }}
+            style={{ width: `${getProgressValue(processingFps, 15)}%` }}
           />
         </div>
       </div>
@@ -103,14 +116,14 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
         </div>
         <div className="flex justify-between items-center mb-1">
           <span className="font-bold text-lg text-blue-300">
-            {metrics.uplink.toFixed(1)} kbps
+            {safeFixed(uplink, 1)} kbps
           </span>
           <span className="text-blue-200 text-sm">Upload rate</span>
         </div>
         <div className="w-full bg-black/30 rounded-full h-2">
           <div
             className="h-2 rounded-full bg-blue-400 transition-all duration-300"
-            style={{ width: `${getProgressValue(metrics.uplink, 2000)}%` }}
+            style={{ width: `${getProgressValue(uplink, 2000)}%` }}
           />
         </div>
       </div>
@@ -123,14 +136,14 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
         </div>
         <div className="flex justify-between items-center mb-1">
           <span className="font-bold text-lg text-green-300">
-            {metrics.downlink.toFixed(1)} kbps
+            {safeFixed(downlink, 1)} kbps
           </span>
           <span className="text-blue-200 text-sm">Download rate</span>
         </div>
         <div className="w-full bg-black/30 rounded-full h-2">
           <div
             className="h-2 rounded-full bg-green-400 transition-all duration-300"
-            style={{ width: `${getProgressValue(metrics.downlink, 1000)}%` }}
+            style={{ width: `${getProgressValue(downlink, 1000)}%` }}
           />
         </div>
       </div>
@@ -141,11 +154,11 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-blue-200">Server Latency:</span>
-            <span className="text-white font-semibold">{metrics.serverLatency.toFixed(1)}ms</span>
+            <span className="text-white font-semibold">{safeFixed(serverLatency, 1)}ms</span>
           </div>
           <div className="flex justify-between">
             <span className="text-blue-200">Network Latency:</span>
-            <span className="text-white font-semibold">{metrics.networkLatency.toFixed(1)}ms</span>
+            <span className="text-white font-semibold">{safeFixed(networkLatency, 1)}ms</span>
           </div>
           <div className="flex justify-between">
             <span className="text-blue-200">Frames Processed:</span>
@@ -159,19 +172,19 @@ const MetricsPanel: React.FC<MetricsPanelProps> = ({ metrics, onExportMetrics })
         <h4 className="text-white font-medium mb-3">System Status</h4>
         <div className="flex flex-wrap gap-2">
           <span className={`px-2 py-1 rounded text-xs ${
-            metrics.processingFps > 0 ? 'bg-green-500/20 text-green-300' : 'bg-gray-500/20 text-gray-300'
+            processingFps > 0 ? 'bg-green-500/20 text-green-300' : 'bg-gray-500/20 text-gray-300'
           }`}>
-            {metrics.processingFps > 0 ? 'Active' : 'Idle'}
+            {processingFps > 0 ? 'Active' : 'Idle'}
           </span>
           <span className={`px-2 py-1 rounded text-xs ${
-            metrics.processingFps < 10 ? 'bg-yellow-500/20 text-yellow-300' : 'bg-green-500/20 text-green-300'
+            processingFps < 10 ? 'bg-yellow-500/20 text-yellow-300' : 'bg-green-500/20 text-green-300'
           }`}>
-            {metrics.processingFps < 10 ? 'Low FPS' : 'Good FPS'}
+            {processingFps < 10 ? 'Low FPS' : 'Good FPS'}
           </span>
           <span className={`px-2 py-1 rounded text-xs ${
-            metrics.e2eLatency.current < 100 ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'
+            e2eCurrent < 100 ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'
           }`}>
-            {metrics.e2eLatency.current < 100 ? 'Low Latency' : 'High Latency'}
+            {e2eCurrent < 100 ? 'Low Latency' : 'High Latency'}
           </span>
         </div>
       </div>

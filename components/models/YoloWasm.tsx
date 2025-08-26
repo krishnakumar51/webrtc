@@ -5,57 +5,70 @@ let session: InferenceSession | null = null;
 import { createModelCpu, runModel } from '../../utils/runModel';
 import * as ort from 'onnxruntime-web';
 
-// Configure WASM runtime so ORT can find the binaries that next.config.js copies
+// Configure WASM runtime so ORT can find the binaries in public directory
 if (typeof window !== 'undefined') {
   try {
-    // Prefer SIMD if available; keep threads to 1 to avoid needing threaded wasm binaries
-    ort.env.wasm.simd = true;
-    ort.env.wasm.numThreads = 1;
-    // This matches next.config.js CopyPlugin target ("static/chunks/pages")
-    ort.env.wasm.wasmPaths = '/_next/static/chunks/pages/';
-    console.log('🔧 YOLO WASM - Configured ORT wasm paths:', ort.env.wasm.wasmPaths);
+    // Check for cross-origin isolation
+    if (!crossOriginIsolated) {
+      console.warn('⚠️ Page not cross-origin isolated. SharedArrayBuffer unavailable.');
+    } else {
+      console.log('✅ Cross-origin isolation enabled. SharedArrayBuffer available.');
+    }
+    
+    // Browser-specific optimizations
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    
+    // Ultra-conservative configuration for maximum compatibility
+    ort.env.wasm.numThreads = 1; // Single thread only
+    ort.env.wasm.simd = false; // Disable SIMD completely
+    ort.env.wasm.proxy = false; // Disable proxy
+    ort.env.wasm.initTimeout = 30000; // 30 second timeout
+    console.log('🔧 Using ultra-conservative WASM configuration');
+    
+    // Configure WASM paths with fallback
+    try {
+      ort.env.wasm.wasmPaths = "/";
+    } catch (e) {
+      console.warn('⚠️ Failed to set WASM paths, using default');
+    }
+    
+    console.log('✅ WASM configuration:', {
+      numThreads: ort.env.wasm.numThreads,
+      simd: ort.env.wasm.simd,
+      wasmPaths: ort.env.wasm.wasmPaths,
+      crossOriginIsolated: crossOriginIsolated
+    });
   } catch (e) {
-    console.warn('⚠️ YOLO WASM - Failed to configure ORT wasm env; will rely on defaults', e);
+    console.warn('⚠️ Failed to configure ORT wasm env:', e);
   }
 }
 
-// Using YOLOv10n quantized model for low-resource optimization
-export const MODEL_PATH = '/models/yolov10n-int8-320.onnx'; // Use quantized int8 model for better performance
+// Streamlined inference pipeline - WASM mode uses regular model for compatibility
+export const MODEL_PATH = '/models/yolov10n.onnx'; // Regular model for better compatibility
+const MODEL_INPUT_SIZE = 640; // Input size for WASM mode (640x640)
 
 export const initYoloModel = async () => {
   if (!session) {
     try {
-      console.log('🚀 YOLO WASM - Starting model initialization...');
-      console.log('🤖 YOLO WASM - Initializing model for mobile inference...');
-      console.log('📁 YOLO WASM - Loading model from:', MODEL_PATH);
-      
       const loadStart = Date.now();
       session = await createModelCpu(MODEL_PATH);
       const loadTime = Date.now() - loadStart;
       
-      console.log(`✅ YOLO WASM - Model loaded successfully in ${loadTime}ms`);
-      console.log('✅ YOLO WASM - Model loaded successfully for mobile devices');
-      console.log('🔧 YOLO WASM - Ready for client-side inference (HTTPS compatible)');
-      
-      // Log session metadata if available
-      if (session && session.inputNames) {
-        console.log('📊 YOLO WASM - Model input names:', session.inputNames);
-        console.log('📊 YOLO WASM - Model output names:', session.outputNames);
-      }
+      console.log(`✅ WASM model loaded (${loadTime}ms)`);
       
     } catch (error) {
-      console.error('❌ YOLO WASM - Failed to load model:', error);
-      console.error('❌ YOLO WASM - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-      console.warn('⚠️ YOLO WASM - Mobile inference may not work without model');
-      
-      // Return null instead of throwing to prevent crashes
-      return null;
+      console.error('❌ Failed to load WASM model:', error);
+      throw error; // No fallback - server mode serves as alternative
     }
   }
   return session;
 };
 
 export const runYoloModel = async (imageData: ImageData) => {
+  const startTime = Date.now();
+  console.log(`🔍 WASM Detection Start - Input: ${imageData.width}x${imageData.height}`);
+  
   if (!session) {
     console.log('🔄 YOLO WASM - Session not initialized, loading model...');
     await initYoloModel();
@@ -67,45 +80,41 @@ export const runYoloModel = async (imageData: ImageData) => {
   }
 
   try {
-    console.log('🧠 YOLO WASM - Starting inference...');
-    console.log('📐 YOLO WASM - Input image dimensions:', imageData.width, 'x', imageData.height);
-    
     const preprocessStart = Date.now();
     const tensor = await preprocessImage(imageData);
     const preprocessTime = Date.now() - preprocessStart;
-    console.log(`⚙️ YOLO WASM - Preprocessing completed in ${preprocessTime}ms`);
+    console.log(`⚙️ WASM Preprocessing: ${preprocessTime}ms, Tensor shape: [${tensor.dims.join(', ')}]`);
     
+    const inferenceStart = Date.now();
     const [output, inferenceTime] = await runModel(session, tensor);
-    console.log(`🚀 YOLO WASM - Model inference completed in ${inferenceTime}ms`);
+    const actualInferenceTime = Date.now() - inferenceStart;
+    console.log(`🧠 WASM Inference: ${actualInferenceTime}ms, Output shape: [${output.dims.join(', ')}]`);
     
     const postprocessStart = Date.now();
     const detections = postprocessResults(output, imageData.width, imageData.height);
     const postprocessTime = Date.now() - postprocessStart;
-    console.log(`🔧 YOLO WASM - Postprocessing completed in ${postprocessTime}ms`);
+    const totalTime = Date.now() - startTime;
     
-    const totalTime = preprocessTime + inferenceTime + postprocessTime;
+    console.log(`🔧 WASM Postprocessing: ${postprocessTime}ms, Found ${detections.length} detections`);
+    console.log(`⏱️ WASM Total Pipeline: ${totalTime}ms (preprocess: ${preprocessTime}ms, inference: ${actualInferenceTime}ms, postprocess: ${postprocessTime}ms)`);
     
     if (detections.length > 0) {
-      console.log(`🎯 YOLO WASM - Detected ${detections.length} objects (total: ${totalTime}ms)`);
-      console.log('📊 YOLO WASM - Detection breakdown:', detections.map(d => `${d.label}: ${d.score && isFinite(d.score) ? d.score.toFixed(3) : 'N/A'}`));
+      console.log(`🎯 WASM Detections: ${detections.map(d => `${d.label} (${(d.score * 100).toFixed(1)}% at [${d.xmin.toFixed(3)}, ${d.ymin.toFixed(3)}, ${d.xmax.toFixed(3)}, ${d.ymax.toFixed(3)}])`).join(', ')}`);
     } else {
-      console.log(`🔍 YOLO WASM - No objects detected (total: ${totalTime}ms)`);
+      console.log('🔍 WASM: No objects detected above threshold');
     }
     
     return detections;
   } catch (error) {
-    console.error('❌ YOLO WASM - Inference error:', error);
-    console.error('❌ YOLO WASM - Error stack:', error instanceof Error ? error.stack : 'No stack trace');
-    console.error('⚠️ YOLO WASM - This may affect mobile object detection');
+    console.error('❌ WASM inference failed:', error);
+    console.error('❌ WASM Error stack:', error);
     return [];
   }
 };
 
 const preprocessImage = async (imageData: ImageData): Promise<ort.Tensor> => {
   const { width, height, data } = imageData;
-  const targetSize = 320; // Downscale to 320x320 for low-resource
-  
-  console.log(`📐 YOLO WASM - Preprocessing: ${width}x${height} -> ${targetSize}x${targetSize}`);
+  const targetSize = MODEL_INPUT_SIZE; // Use 640x640 for regular model
   
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d')!;
@@ -123,7 +132,6 @@ const preprocessImage = async (imageData: ImageData): Promise<ort.Tensor> => {
   const resizedImageData = ctx.getImageData(0, 0, targetSize, targetSize);
   const pixels = resizedImageData.data;
   
-  console.log('🔄 YOLO WASM - Converting pixels to tensor format...');
   const tensorData = new Float32Array(3 * targetSize * targetSize);
   for (let i = 0; i < targetSize * targetSize; i++) {
     const pixelIndex = i * 4;
@@ -134,7 +142,6 @@ const preprocessImage = async (imageData: ImageData): Promise<ort.Tensor> => {
   }
   
   const tensor = new ort.Tensor('float32', tensorData, [1, 3, targetSize, targetSize]);
-  console.log('✅ YOLO WASM - Tensor created with shape:', tensor.dims);
   
   return tensor;
 };
@@ -142,59 +149,97 @@ const preprocessImage = async (imageData: ImageData): Promise<ort.Tensor> => {
 import type { Detection } from '../../types';
 
 const postprocessResults = (output: ort.Tensor, originalWidth: number, originalHeight: number) => {
-  // Simplified YOLO postprocessing with NMS
-  // Assuming output shape [1, num_boxes, 85] (x,y,w,h,conf + 80 classes)
-
-  console.log('🔧 YOLO WASM - Postprocessing output tensor with shape:', output.dims);
+  console.log(`🔧 WASM Postprocessing - Output dims: [${output.dims.join(', ')}], Original size: ${originalWidth}x${originalHeight}`);
   
-  const detections: Detection[] = [];
   const data = output.data as Float32Array;
   const numBoxes = output.dims[1];
   const boxSize = output.dims[2];
   
-  console.log(`📊 YOLO WASM - Processing ${numBoxes} boxes with ${boxSize} values each`);
+  console.log(`📊 WASM Processing ${numBoxes} boxes with ${boxSize} values each`);
 
   let candidates: Detection[] = [];
+  let totalBoxesAboveConfThreshold = 0;
+  let totalBoxesAboveScoreThreshold = 0;
+  
+  // YOLOv10 format: [x0, y0, x1, y1, score, cls_id] - 6 values per detection (corner coordinates)
+  for (let i = 0; i < Math.min(10, numBoxes); i++) {
+    const offset = i * boxSize;
+    const x0 = data[offset];
+    const y0 = data[offset + 1];
+    const x1 = data[offset + 2];
+    const y1 = data[offset + 3];
+    const score = data[offset + 4];
+    const classId = Math.round(data[offset + 5]);
+    console.log(`🔍 WASM Raw Box ${i}: [${x0.toFixed(2)}, ${y0.toFixed(2)}, ${x1.toFixed(2)}, ${y1.toFixed(2)}, ${score.toFixed(6)}, ${classId}]`);
+  }
+  
   for (let i = 0; i < numBoxes; i++) {
     const offset = i * boxSize;
-    const conf = data[offset + 4];
-    if (conf > 0.5) {
-      const classScores = data.slice(offset + 5, offset + boxSize);
-      const maxClass = Math.max(...classScores);
-      const classId = classScores.indexOf(maxClass);
-      if (maxClass * conf > 0.25 && classId >= 0 && classId < YOLO_CLASSES.length) {
-        const x = data[offset];
-        const y = data[offset + 1];
-        const w = data[offset + 2];
-        const h = data[offset + 3];
-        const xmin = Math.max(0, (x - w/2) / output.dims[3]);
-        const ymin = Math.max(0, (y - h/2) / output.dims[2]);
-        const xmax = Math.min(1, (x + w/2) / output.dims[3]);
-        const ymax = Math.min(1, (y + h/2) / output.dims[2]);
-        const finalScore = maxClass * conf;
+    const x0 = data[offset];
+    const y0 = data[offset + 1];
+    const x1 = data[offset + 2];
+    const y1 = data[offset + 3];
+    const score = data[offset + 4];
+    const classId = Math.round(data[offset + 5]);
+    
+    if (score > 0.45) { // Confidence threshold
+      totalBoxesAboveConfThreshold++;
+      
+      if (i < 5) { // Log first 5 boxes for debugging
+        console.log(`📦 WASM Box ${i}: score=${score.toFixed(3)}, classId=${classId}, class=${YOLO_CLASSES[classId] || 'unknown'}`);
+      }
+      
+      if (score > 0.45 && classId >= 0 && classId < YOLO_CLASSES.length) {
+        totalBoxesAboveScoreThreshold++;
+        
+        // YOLOv10 already provides corner coordinates, just normalize to [0,1] range
+        const xmin = Math.max(0, Math.min(1, x0 / MODEL_INPUT_SIZE));
+        const ymin = Math.max(0, Math.min(1, y0 / MODEL_INPUT_SIZE));
+        const xmax = Math.max(0, Math.min(1, x1 / MODEL_INPUT_SIZE));
+        const ymax = Math.max(0, Math.min(1, y1 / MODEL_INPUT_SIZE));
+        
+        // Ensure xmax > xmin and ymax > ymin for valid bounding boxes
+        if (xmax <= xmin || ymax <= ymin) {
+          if (i < 3) console.log(`⚠️ WASM Box ${i} invalid dimensions: xmin=${xmin.toFixed(3)}, xmax=${xmax.toFixed(3)}, ymin=${ymin.toFixed(3)}, ymax=${ymax.toFixed(3)}`);
+          continue; // Skip invalid boxes
+        }
+        
+        if (i < 3) { // Log coordinate calculation for first 3 valid boxes
+          console.log(`📍 WASM Box ${i} coords: raw=[${x0.toFixed(1)}, ${y0.toFixed(1)}, ${x1.toFixed(1)}, ${y1.toFixed(1)}] -> normalized=[${xmin.toFixed(3)}, ${ymin.toFixed(3)}, ${xmax.toFixed(3)}, ${ymax.toFixed(3)}]`);
+        }
         
         // Ensure all values are valid numbers
-        if (isFinite(finalScore) && isFinite(xmin) && isFinite(ymin) && isFinite(xmax) && isFinite(ymax)) {
+        if (isFinite(score) && isFinite(xmin) && isFinite(ymin) && isFinite(xmax) && isFinite(ymax)) {
           candidates.push({
             label: YOLO_CLASSES[classId],
-            score: finalScore,
+            score: score,
             xmin, ymin, xmax, ymax
           });
+        } else {
+          console.warn(`⚠️ WASM Invalid coordinates for box ${i}:`, { score, xmin, ymin, xmax, ymax });
         }
       }
     }
   }
   
+  console.log(`📈 WASM Filtering: ${totalBoxesAboveConfThreshold} boxes above conf threshold, ${totalBoxesAboveScoreThreshold} above score threshold, ${candidates.length} candidates`);
+  
   // Simple NMS
   candidates.sort((a, b) => b.score - a.score);
   const finalDetections: Detection[] = [];
+  let nmsRemovedCount = 0;
+  
   while (candidates.length > 0) {
     const det = candidates.shift();
     if (det) {
       finalDetections.push(det);
+      const beforeFilter = candidates.length;
       candidates = candidates.filter(c => iou(det, c) < 0.5);
+      nmsRemovedCount += beforeFilter - candidates.length;
     }
   }
+  
+  console.log(`🎯 WASM NMS: Removed ${nmsRemovedCount} overlapping boxes, final count: ${finalDetections.length}`);
   
   return finalDetections;
 };

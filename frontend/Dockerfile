@@ -28,8 +28,20 @@ COPY utils/ ./utils/
 COPY data/ ./data/
 
 # Copy only essential models (reduce build size)
-COPY public/models/yolov10n-int8-320.onnx ./public/models/
+# Removed quantized model to fix DynamicQuantizeLinear errors
+# COPY public/models/yolov10n-int8-320.onnx ./public/models/
+COPY public/models/yolov10n.onnx ./public/models/
 COPY public/favicon.svg public/icon.png public/manifest.json ./public/
+
+# Copy WASM files from onnxruntime-web for proper loading (1.18.0 compatible)
+RUN mkdir -p ./public/
+COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm.wasm ./public/ort-wasm.wasm
+COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm ./public/ort-wasm-simd.wasm
+COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-threaded.wasm ./public/ort-wasm-threaded.wasm
+COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm ./public/ort-wasm-simd-threaded.wasm
+COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd.jsep.wasm ./public/ort-wasm-simd.jsep.wasm
+COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm ./public/ort-wasm-simd-threaded.jsep.wasm
+# Note: .mjs files are not available in onnxruntime-web 1.18.0 distribution
 
 # Build with optimizations
 ENV NEXT_TELEMETRY_DISABLED=1

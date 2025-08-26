@@ -18,11 +18,32 @@ const nextConfig = {
     NEXT_PUBLIC_SIGNALING_SERVER_URL: process.env.NEXT_PUBLIC_SIGNALING_SERVER_URL || 'http://localhost:8000',
     NEXT_PUBLIC_MODE: process.env.NEXT_PUBLIC_MODE || 'wasm',
   },
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          {
+            key: 'Cross-Origin-Opener-Policy',
+            value: 'same-origin',
+          },
+          {
+            key: 'Cross-Origin-Embedder-Policy',
+            value: 'require-corp',
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return [
       {
         source: '/models/:path*',
         destination: '/models/:path*', // Served from public/models
+      },
+      {
+        source: '/favicon.ico',
+        destination: '/favicon.svg',
       },
     ];
   },
@@ -37,17 +58,9 @@ const nextConfig = {
         new NodePolyfillPlugin(),
         new CopyPlugin({
           patterns: [
+            // Only copy the essential model files used by the app
             {
-              from: './node_modules/onnxruntime-web/dist/ort-wasm.wasm',
-              to: 'static/chunks/pages',
-            },
-            {
-              from: './node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm',
-              to: 'static/chunks/pages',
-            },
-            // Only copy the essential model file
-            {
-              from: './public/models/yolov10n-int8-320.onnx',
+              from: './public/models/yolov10n.onnx',
               to: 'static/chunks/pages',
             },
           ],
@@ -76,6 +89,25 @@ const nextConfig = {
 
 const withPWA = require('next-pwa')({
   dest: 'public',
+  register: true,
+  skipWaiting: true,
+  clientsClaim: true,
+  cleanupOutdatedCaches: true,
+  // Do NOT precache heavy artifacts like onnx/wasm
+  buildExcludes: [
+    /.*\.(?:onnx|wasm|mjs)$/i,
+  ],
+  // Avoid caching model/wasm and Next internal manifests at runtime
+  runtimeCaching: [
+    {
+      urlPattern: /_buildManifest\.js$|_ssgManifest\.js$/,
+      handler: 'NetworkOnly',
+    },
+    {
+      urlPattern: /\/(.*)\.(?:onnx|wasm|mjs)$/i,
+      handler: 'NetworkOnly',
+    },
+  ],
 });
 
 module.exports = withBundleAnalyzer(withPWA(nextConfig));

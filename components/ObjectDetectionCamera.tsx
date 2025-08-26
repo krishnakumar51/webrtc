@@ -286,22 +286,40 @@ const ObjectDetectionCamera = (props: {
         <div>Using {props.modelName}</div>
         <div className="flex flex-row flex-wrap items-center justify-between w-full gap-3 px-5">
           <div>
-            {'Model Inference Time: ' + inferenceTime.toFixed() + 'ms'}
-            <br />
-            {'Total Time: ' + totalTime.toFixed() + 'ms'}
-            <br />
-            {'Overhead Time: +' + (totalTime - inferenceTime).toFixed(2) + 'ms'}
+            {(() => {
+              const safeFixed = (v: any, digits = 0) =>
+                typeof v === 'number' && isFinite(v) ? v.toFixed(digits) : '0';
+              return (
+                <>
+                  {'Model Inference Time: ' + safeFixed(inferenceTime) + 'ms'}
+                  <br />
+                  {'Total Time: ' + safeFixed(totalTime) + 'ms'}
+                  <br />
+                  {'Overhead Time: +' + safeFixed((totalTime || 0) - (inferenceTime || 0), 2) + 'ms'}
+                </>
+              );
+            })()}
           </div>
           <div>
-            <div>
-              {'Model FPS: ' + (1000 / inferenceTime).toFixed(2) + 'fps'}
-            </div>
-            <div>{'Total FPS: ' + (1000 / totalTime).toFixed(2) + 'fps'}</div>
-            <div>
-              {'Overhead FPS: ' +
-                (1000 * (1 / totalTime - 1 / inferenceTime)).toFixed(2) +
-                'fps'}
-            </div>
+            {(() => {
+              const safeFixed = (v: any, digits = 2) =>
+                typeof v === 'number' && isFinite(v) ? v.toFixed(digits) : '0.00';
+              const safeDiv = (num: any) =>
+                typeof num === 'number' && isFinite(num) && num > 0 ? 1000 / num : 0;
+              const modelFps = safeDiv(inferenceTime as any);
+              const totalFps = safeDiv(totalTime as any);
+              const overheadFps = (typeof totalTime === 'number' && isFinite(totalTime) && totalTime > 0 &&
+                                  typeof inferenceTime === 'number' && isFinite(inferenceTime) && inferenceTime > 0)
+                ? 1000 * (1 / totalTime - 1 / inferenceTime)
+                : 0;
+              return (
+                <>
+                  <div>{'Model FPS: ' + safeFixed(modelFps) + 'fps'}</div>
+                  <div>{'Total FPS: ' + safeFixed(totalFps) + 'fps'}</div>
+                  <div>{'Overhead FPS: ' + safeFixed(overheadFps) + 'fps'}</div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>

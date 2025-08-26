@@ -1,6 +1,29 @@
 import React, { useEffect, useRef } from 'react';
 import type { Detection } from '../types';
 
+// Color mapping for different object classes
+const getClassColor = (label: string): { box: string; bg: string; text: string } => {
+  const colorMap: { [key: string]: { box: string; bg: string; text: string } } = {
+    'person': { box: '#ef4444', bg: '#dc2626', text: '#ffffff' }, // red
+    'car': { box: '#3b82f6', bg: '#2563eb', text: '#ffffff' }, // blue
+    'truck': { box: '#3b82f6', bg: '#2563eb', text: '#ffffff' }, // blue
+    'bus': { box: '#3b82f6', bg: '#2563eb', text: '#ffffff' }, // blue
+    'motorcycle': { box: '#8b5cf6', bg: '#7c3aed', text: '#ffffff' }, // purple
+    'bicycle': { box: '#10b981', bg: '#059669', text: '#ffffff' }, // emerald
+    'dog': { box: '#f59e0b', bg: '#d97706', text: '#ffffff' }, // amber
+    'cat': { box: '#f59e0b', bg: '#d97706', text: '#ffffff' }, // amber
+    'bird': { box: '#06b6d4', bg: '#0891b2', text: '#ffffff' }, // cyan
+    'bottle': { box: '#84cc16', bg: '#65a30d', text: '#ffffff' }, // lime
+    'cup': { box: '#84cc16', bg: '#65a30d', text: '#ffffff' }, // lime
+    'chair': { box: '#a855f7', bg: '#9333ea', text: '#ffffff' }, // violet
+    'couch': { box: '#a855f7', bg: '#9333ea', text: '#ffffff' }, // violet
+    'tv': { box: '#ec4899', bg: '#db2777', text: '#ffffff' }, // pink
+    'laptop': { box: '#ec4899', bg: '#db2777', text: '#ffffff' }, // pink
+  };
+  
+  return colorMap[label] || { box: '#38bdf8', bg: '#0ea5e9', text: '#ffffff' }; // default sky
+};
+
 interface DetectionOverlayProps {
   detections: Detection[];
   videoElement: HTMLVideoElement | null;
@@ -30,12 +53,15 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       const y = detection.ymin * canvas.height;
       const width = (detection.xmax - detection.xmin) * canvas.width;
       const height = (detection.ymax - detection.ymin) * canvas.height;
+      
+      // Get colors for this object class
+      const colors = getClassColor(detection.label);
 
       // Draw bounding box with rounded corners and shadow
       ctx.save();
-      ctx.strokeStyle = '#38bdf8'; // Tailwind sky-400
+      ctx.strokeStyle = colors.box;
       ctx.lineWidth = 3;
-      ctx.shadowColor = 'rgba(56,189,248,0.5)';
+      ctx.shadowColor = colors.box + '80'; // Add transparency
       ctx.shadowBlur = 8;
       ctx.beginPath();
       const radius = 12;
@@ -52,39 +78,53 @@ const DetectionOverlay: React.FC<DetectionOverlayProps> = ({ detections, videoEl
       ctx.stroke();
       ctx.restore();
 
-      // Draw label background with glassmorphism effect
+      // Draw label background with glassmorphism effect (positioned at bottom of bounding box)
       const scorePercent = detection.score && isFinite(detection.score) ? (detection.score * 100).toFixed(1) : 'N/A';
       const label = `${detection.label} ${scorePercent}%`;
       ctx.font = 'bold 16px Segoe UI, Arial, sans-serif';
       const textWidth = ctx.measureText(label).width;
       const textHeight = 24;
+      const labelY = y + height; // Position at bottom of bounding box
       ctx.save();
-      ctx.globalAlpha = 0.7;
-      ctx.fillStyle = '#0ea5e9'; // Tailwind sky-500
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = colors.bg;
       ctx.filter = 'blur(0.5px)';
       ctx.beginPath();
-      ctx.moveTo(x, y - textHeight);
-      ctx.lineTo(x + textWidth + 16, y - textHeight);
-      ctx.quadraticCurveTo(x + textWidth + 20, y - textHeight, x + textWidth + 20, y - textHeight + 8);
-      ctx.lineTo(x + textWidth + 20, y - 8);
-      ctx.quadraticCurveTo(x + textWidth + 20, y, x + textWidth + 16, y);
-      ctx.lineTo(x, y);
-      ctx.quadraticCurveTo(x - 4, y, x - 4, y - 8);
-      ctx.lineTo(x - 4, y - textHeight + 8);
-      ctx.quadraticCurveTo(x - 4, y - textHeight, x, y - textHeight);
+      ctx.moveTo(x, labelY);
+      ctx.lineTo(x + textWidth + 16, labelY);
+      ctx.quadraticCurveTo(x + textWidth + 20, labelY, x + textWidth + 20, labelY + 8);
+      ctx.lineTo(x + textWidth + 20, labelY + textHeight - 8);
+      ctx.quadraticCurveTo(x + textWidth + 20, labelY + textHeight, x + textWidth + 16, labelY + textHeight);
+      ctx.lineTo(x, labelY + textHeight);
+      ctx.quadraticCurveTo(x - 4, labelY + textHeight, x - 4, labelY + textHeight - 8);
+      ctx.lineTo(x - 4, labelY + 8);
+      ctx.quadraticCurveTo(x - 4, labelY, x, labelY)
       ctx.closePath();
       ctx.fill();
       ctx.restore();
 
       // Draw label text
       ctx.save();
-      ctx.fillStyle = '#fff';
-      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.fillStyle = colors.text;
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
       ctx.shadowBlur = 2;
-      ctx.fillText(label, x + 8, y - 10);
+      ctx.fillText(label, x + 8, labelY + 16); // Position text inside label background
       ctx.restore();
     });
   }, [detections, videoElement]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (!canvasRef.current || !videoElement) return;
+      const rect = videoElement.getBoundingClientRect();
+      canvasRef.current.width = rect.width;
+      canvasRef.current.height = rect.height;
+      // Trigger redraw by updating detections dependency
+    };
+    
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [videoElement]);
 
   return (
     <canvas
