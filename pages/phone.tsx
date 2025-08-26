@@ -15,8 +15,6 @@ export default function Phone({ signalingUrl }: PhoneProps) {
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string>('');
-  const [framesSent, setFramesSent] = useState(0);
-  const [detections, setDetections] = useState<any[]>([]);
   
   // Dynamic signaling URL detection
   const [currentSignalingUrl, setCurrentSignalingUrl] = useState<string>('');
@@ -195,18 +193,9 @@ export default function Phone({ signalingUrl }: PhoneProps) {
       console.log('📊 Phone - Data channel buffer amount low');
     };
 
-    // Handle incoming messages (detection results)
+    // Handle incoming messages
     dataChannelRef.current.onmessage = (event) => {
-      console.log('📨 Phone - Received detection results from browser');
-      console.log('📊 Phone - Message size:', event.data.length);
-      try {
-        const result = JSON.parse(event.data);
-        console.log('📊 Phone - Parsed detection results:', result.detections?.length || 0, 'detections');
-        setDetections(result.detections || []);
-      } catch (error) {
-        console.error('❌ Phone - Error parsing detection result:', error);
-        console.error('📊 Phone - Raw message data:', event.data.substring(0, 100) + '...');
-      }
+      console.log('📨 Phone - Received message from browser');
     };
 
     // Handle connection state changes
@@ -533,7 +522,7 @@ export default function Phone({ signalingUrl }: PhoneProps) {
       if (shouldLogFrame) {
         console.log(`📤 Phone - Frame ${frameId} sent successfully in ${sendTime}ms (total: ${Date.now() - captureStart}ms)`);
       }
-      setFramesSent(prev => prev + 1);
+      // Frame sent successfully
     } catch (error) {
       console.error('❌ Phone - Error sending frame:', error);
       // Fallback: try with lower quality
@@ -554,7 +543,7 @@ export default function Phone({ signalingUrl }: PhoneProps) {
         const retryTime = Date.now() - retryStart;
         
         console.log(`📤 Phone - Frame ${frameId} sent with lower quality in ${retryTime}ms`);
-        setFramesSent(prev => prev + 1);
+        // Frame sent with lower quality
       } catch (fallbackError) {
         console.error('❌ Phone - Error sending fallback frame:', fallbackError);
         console.error('❌ Phone - Fallback error stack:', fallbackError instanceof Error ? fallbackError.stack : 'No stack trace');
@@ -648,9 +637,7 @@ export default function Phone({ signalingUrl }: PhoneProps) {
                     }`}>
                       {isStreaming ? 'Detecting' : 'Idle'}
                     </div>
-                    <div className="bg-slate-700/50 px-4 py-2 rounded-lg border border-slate-600/50">
-                      <span className="text-white text-sm font-medium">{detections.length} objects</span>
-                    </div>
+
                   </div>
                 </div>
 
@@ -677,32 +664,7 @@ export default function Phone({ signalingUrl }: PhoneProps) {
                     </div>
                   )}
                   
-                  {/* Detection Overlays */}
-                  {detections.map((detection, index) => (
-                    <div
-                      key={index}
-                      className="absolute border-2 border-green-400 rounded-lg"
-                      style={{
-                        left: `${detection.xmin * 100}%`,
-                        top: `${detection.ymin * 100}%`,
-                        width: `${(detection.xmax - detection.xmin) * 100}%`,
-                        height: `${(detection.ymax - detection.ymin) * 100}%`,
-                      }}
-                    >
-                      <div className="bg-green-400/90 backdrop-blur-sm text-black text-xs px-2 py-1 rounded-md -mt-6 font-semibold">
-                        {detection.label} {(detection.score * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                  ))}
-                  
-                  {/* Detection count overlay */}
-                  {isConnected && detections.length > 0 && (
-                    <div className="absolute top-4 right-4 bg-slate-800/80 backdrop-blur-sm rounded-lg px-3 py-2 border border-slate-600/50">
-                      <span className="text-white text-sm font-medium">
-                        {detections.length} object{detections.length !== 1 ? 's' : ''} detected
-                      </span>
-                    </div>
-                  )}
+
 
                   {/* Hidden canvas for frame capture */}
                   <canvas ref={canvasRef} style={{ display: 'none' }} />
@@ -781,145 +743,29 @@ export default function Phone({ signalingUrl }: PhoneProps) {
             </div>
           </div>
 
-          {/* Performance Metrics Panel - Below Video Player */}
-          <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl mb-6">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
-                  <span className="text-white text-lg">⚡</span>
-                </div>
-                <h3 className="text-xl font-bold text-white">Performance Metrics</h3>
+          {/* Frame Parameters Panel */}
+          <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
+                <span className="text-white text-lg">⚙️</span>
               </div>
+              <h3 className="text-xl font-bold text-white">Frame Parameters</h3>
             </div>
             
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
-                <div className="text-2xl font-bold text-white mb-1">{framesSent}</div>
-                <div className="text-xs text-slate-300">Frames Sent</div>
-                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
-                  <div className="bg-gradient-to-r from-blue-400 to-cyan-400 h-1 rounded-full transition-all duration-300" style={{ width: `${Math.min(framesSent / 10, 100)}%` }} />
-                </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                <div className="text-sm text-slate-300 mb-1">Resolution</div>
+                <div className="text-lg font-bold text-white">640x480</div>
               </div>
               
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
-                <div className="text-2xl font-bold text-white mb-1">{detections.length}</div>
-                <div className="text-xs text-slate-300">Objects Found</div>
-                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
-                  <div className={`h-1 rounded-full transition-all duration-300 ${
-                    detections.length > 0 ? 'bg-gradient-to-r from-green-400 to-emerald-400' : 'bg-gray-600'
-                  }`} style={{ width: `${Math.min(detections.length * 20, 100)}%` }} />
-                </div>
+              <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                <div className="text-sm text-slate-300 mb-1">Frame Rate</div>
+                <div className="text-lg font-bold text-white">15 FPS</div>
               </div>
               
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
-                <div className="text-2xl font-bold text-white mb-1">0</div>
-                <div className="text-xs text-slate-300">Processing FPS</div>
-                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
-                  <div className="bg-gradient-to-r from-purple-400 to-pink-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
-                </div>
-              </div>
-              
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
-                <div className="text-2xl font-bold text-white mb-1">0</div>
-                <div className="text-xs text-slate-300">Uplink (kbps)</div>
-                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
-                  <div className="bg-gradient-to-r from-green-400 to-blue-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
-                </div>
-              </div>
-              
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
-                <div className="text-2xl font-bold text-white mb-1">0</div>
-                <div className="text-xs text-slate-300">Server (ms)</div>
-                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
-                  <div className="bg-gradient-to-r from-orange-400 to-red-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
-                </div>
-              </div>
-              
-              <div className="bg-slate-800/50 rounded-xl p-4 border border-slate-600/50 text-center">
-                <div className="text-2xl font-bold text-white mb-1">0</div>
-                <div className="text-xs text-slate-300">Network (ms)</div>
-                <div className="w-full bg-slate-600 rounded-full h-1 mt-2">
-                  <div className="bg-gradient-to-r from-teal-400 to-cyan-400 h-1 rounded-full transition-all duration-300" style={{ width: '0%' }} />
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          {/* Bottom Section: Detection Info (Left) + Quick Stats (Right) */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Detection Info Panel - Left Side */}
-            <div>
-              <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl h-full flex flex-col">
-                <div className="flex items-center space-x-3 mb-6">
-                  <div className="w-10 h-10 bg-orange-600 rounded-lg flex items-center justify-center">
-                    <span className="text-white text-lg">🎯</span>
-                  </div>
-                  <h3 className="text-xl font-bold text-white">Detection Information</h3>
-                </div>
-                
-                <div className="grid grid-cols-3 gap-4 items-start pt-4">
-                  <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-600/50 text-center aspect-square flex flex-col justify-center">
-                    <div className="text-3xl font-bold text-white mb-2">{detections.length}</div>
-                    <div className="text-sm text-slate-300 mb-2">Objects Detected</div>
-                    <div className={`w-3 h-3 rounded-full mx-auto ${
-                      detections.length > 0 ? 'bg-green-400' : 'bg-slate-500'
-                    }`} />
-                  </div>
-                  
-                  <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-600/50 text-center aspect-square flex flex-col justify-center">
-                    <div className={`text-3xl font-bold mb-2 ${
-                      isStreaming ? 'text-green-400' : 'text-yellow-400'
-                    }`}>
-                      {isStreaming ? '●' : '○'}
-                    </div>
-                    <div className="text-sm text-slate-300 mb-2">Processing</div>
-                    <div className={`w-3 h-3 rounded-full mx-auto ${
-                      isStreaming ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'
-                    }`} />
-                  </div>
-                  
-                  <div className="bg-slate-800/60 rounded-xl p-4 border border-slate-600/50 text-center aspect-square flex flex-col justify-center">
-                    <div className="text-lg font-bold text-white mb-2">MOBILE</div>
-                    <div className="text-sm text-slate-300 mb-2">Mode</div>
-                    <div className="w-3 h-3 rounded-full mx-auto bg-purple-400" />
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            {/* Quick Stats - Right Side */}
-            <div>
-              <div className="bg-slate-900/50 backdrop-blur-xl rounded-2xl p-6 border border-slate-700/50 shadow-2xl h-full">
-                <div className="flex items-center space-x-3 mb-6">
-                  <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
-                    <span className="text-white text-lg">📊</span>
-                  </div>
-                  <h3 className="text-xl font-bold text-white">Quick Stats</h3>
-                </div>
-
-                
-                <div className="space-y-4">
-                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-300 text-sm">Frames Sent</span>
-                      <span className="text-lg font-bold text-white">{framesSent}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-300 text-sm">Objects Found</span>
-                      <span className="text-lg font-bold text-white">{detections.length}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-300 text-sm">Status</span>
-                      <span className="text-lg font-bold text-white">{isStreaming ? 'Active' : 'Idle'}</span>
-                    </div>
-                  </div>
-                </div>
+              <div className="bg-slate-800/60 rounded-lg p-4 border border-slate-600/50">
+                <div className="text-sm text-slate-300 mb-1">Quality</div>
+                <div className="text-lg font-bold text-white">Medium</div>
               </div>
             </div>
           </div>
