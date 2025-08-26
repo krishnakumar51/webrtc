@@ -177,6 +177,15 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
         
         // Process frames for detection if detection is active
         if (isDetecting.current) {
+          // Track frame arrival for accurate FPS calculation
+          const now = Date.now();
+          frameTimestamps.current.push(now);
+          
+          // Keep only last 100 frame timestamps (for memory efficiency)
+          if (frameTimestamps.current.length > 100) {
+            frameTimestamps.current.shift();
+          }
+          
           // Aggressive frame dropping for better performance
           if (processingFrame.current) {
             // Skip this frame if we're still processing the previous one
@@ -251,15 +260,6 @@ const WebRTCManager = forwardRef<any, WebRTCManagerProps>((
       }
       
       frameCounter.current++;
-    
-    // Track frame timestamp for FPS calculation
-    const now = Date.now();
-    frameTimestamps.current.push(now);
-    
-    // Keep only last 100 frame timestamps (for memory efficiency)
-    if (frameTimestamps.current.length > 100) {
-      frameTimestamps.current.shift();
-    }
       // Update metrics asynchronously to avoid blocking
       updateLatencyMetrics(result).catch(error => 
         console.warn('Metrics update failed:', error)
