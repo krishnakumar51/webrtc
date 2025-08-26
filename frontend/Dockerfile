@@ -6,8 +6,17 @@ FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
+# Force CPU-only ONNX if any package tries to pull node runtime
+ENV npm_config_onnxruntime_node_prebuilt_tag=cpu
+
+# Add npm retry config (helps avoid flaky network issues)
+RUN npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000
+
 # Copy package files
 COPY package*.json ./
+
 # Install dependencies with optimizations
 RUN npm ci --only=production --no-audit --no-fund --prefer-offline && npm cache clean --force
 
@@ -15,6 +24,13 @@ RUN npm ci --only=production --no-audit --no-fund --prefer-offline && npm cache 
 FROM base AS builder
 WORKDIR /app
 COPY package*.json ./
+
+# Apply same env + retry for consistency
+ENV npm_config_onnxruntime_node_prebuilt_tag=cpu
+RUN npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000
+
 RUN npm ci --no-audit --no-fund --prefer-offline
 
 # Copy configuration files first (better caching)
@@ -41,7 +57,6 @@ COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-threaded.wasm .
 COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm ./public/ort-wasm-simd-threaded.wasm
 COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd.jsep.wasm ./public/ort-wasm-simd.jsep.wasm
 COPY --from=deps /app/node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm ./public/ort-wasm-simd-threaded.jsep.wasm
-# Note: .mjs files are not available in onnxruntime-web 1.18.0 distribution
 
 # Build with optimizations
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -69,7 +84,7 @@ COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 # Copy the built application
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./ 
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 # Switch to non-root user

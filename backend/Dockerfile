@@ -12,17 +12,22 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy backend package files
-COPY backend/package*.json ./
+COPY backend/package*.json ./ 
 
 # Force CPU-only install to avoid GPU artifacts
 ENV NODE_ENV=production
-ENV ONNXRUNTIME_PREFER_CPU=1
+ENV npm_config_onnxruntime_node_prebuilt_tag=cpu
+
+# Add npm retry config for flaky downloads
+RUN npm config set fetch-retries 5 \
+    && npm config set fetch-retry-mintimeout 20000 \
+    && npm config set fetch-retry-maxtimeout 120000
 
 # Install only production dependencies
 RUN npm ci --only=production --no-audit --no-fund && npm cache clean --force
 
 # Copy server and models only
-COPY backend/webrtc-server.js ./
+COPY backend/webrtc-server.js ./ 
 COPY public/models/ ./models/
 
 # Expose signaling port
