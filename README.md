@@ -166,8 +166,8 @@ npm run server
 ### Typical Results (30s benchmark)
 | Mode | E2E Latency (P95) | Processing FPS | CPU Usage |
 |------|------------------|----------------|-----------|
-| WASM | 95ms | 12-15 FPS | High (client) |
-| Server | 75ms | 15+ FPS | High (server) |
+| WASM | 95ms | 18-22 FPS | High (client) |
+| Server | 75ms | 25+ FPS | High (server) |
 
 ### Latency Breakdown
 - **Network Latency**: Phone → Browser (10-20ms)
